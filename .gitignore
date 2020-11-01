@@ -1,0 +1,15 @@
+*.pyc
+.project
+.pydevproject
+.vscode
+.idea
+hidden/
+stuff/
+src/
+tf_data_merge_indices/
+data/
+.DS_Store
+visualizations/
+*.json
+highlight_pairs_ori.py
+submit.slurm
