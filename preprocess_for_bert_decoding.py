@@ -24,28 +24,13 @@ if 'singles_and_pairs' not in flags.FLAGS:
 if 'num_instances' not in flags.FLAGS:
     flags.DEFINE_integer('num_instances', -1,
                          'Number of instances to run for before stopping. Use -1 to run on all instances.')
-if 'tag_tokens' not in flags.FLAGS:
-    flags.DEFINE_boolean('tag_tokens', False,
-                         'Number of instances to run for before stopping. Use -1 to run on all instances.')
 if 'coref' not in flags.FLAGS:
     flags.DEFINE_boolean('coref', True, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 flags.DEFINE_string("resolver", "spacy", "Which method to use for turning token tag probabilities into binary tags. Can be one of {threshold, summ_limit, inst_limit}.")
-if 'repl' not in flags.FLAGS:
-    flags.DEFINE_boolean('repl', False, 'Replaces entity mentions with their Representative Mention. Warning, this will cause the coref_chains locations to be incorrect, but shouldnt be a problem since this baseline doesnt use the coref locations')
-if 'allcorefs' not in flags.FLAGS:
-    flags.DEFINE_boolean('allcorefs', False, '')
-if 'triples_only' not in flags.FLAGS:
-    flags.DEFINE_boolean('triples_only', False, '')
 
 FLAGS(sys.argv)
 
 data_dir = os.path.expanduser('~') + '/data/tf_data/with_coref_and_ssi_and_tag_tokens'
-if FLAGS.resolver != 'stanford':
-    data_dir += '_' + FLAGS.resolver
-if FLAGS.allcorefs:
-    data_dir += '_allcorefs'
-if FLAGS.triples_only:
-    data_dir += '_summinc_triples'
 if FLAGS.coref:
     data_dir += '_fusions'
 if FLAGS.coref:
@@ -67,18 +52,10 @@ def flatten_coref_chains(coref_chains, raw_article_sents, ssi):
     for chain in coref_chains:
         flat_chain = []
         for mention in chain:
-            if FLAGS.triples_only:
-                if mention[0] == 2:
-                    flat_mention = (num_tokens_sent1 + mention[1], num_tokens_sent1 + mention[2])
-                elif mention[0] == 0:
-                    flat_mention = (num_tokens_sent1 + num_tokens_sent2 + mention[1], num_tokens_sent1 + num_tokens_sent2 + mention[2])
-                else:
-                    flat_mention = (mention[1], mention[2])
+            if mention[0] == 1:
+                flat_mention = (num_tokens_sent1 + mention[1], num_tokens_sent1 + mention[2])
             else:
-                if mention[0] == 1:
-                    flat_mention = (num_tokens_sent1 + mention[1], num_tokens_sent1 + mention[2])
-                else:
-                    flat_mention = (mention[1], mention[2])
+                flat_mention = (mention[1], mention[2])
             flat_chain.append(flat_mention)
         flat_coref_chains.append(flat_chain)
     return flat_coref_chains
@@ -138,12 +115,6 @@ def main(unused_argv):
             out_dir = os.path.join('data', 'bert', dataset_name, FLAGS.singles_and_pairs, 'input_decoding')
             if FLAGS.coref:
                 out_dir += '_crd'
-            if FLAGS.allcorefs:
-                out_dir += '_allcorefs'
-            if FLAGS.repl:
-                out_dir += '_repl'
-            if FLAGS.triples_only:
-                out_dir += '_summinc_triples'
             util.create_dirs(out_dir)
 
             writer = open(os.path.join(out_dir, dataset_split) + '.tsv', 'wb')
@@ -176,11 +147,7 @@ def main(unused_argv):
                 positive_sents = list(set(util.flatten_list_of_lists(positives)))
 
                 for ssi_idx, ssi in enumerate(similar_source_indices_list):
-                    if FLAGS.repl:
-                        raw_article_sent_tokens = util.coref_replace(raw_article_sents, ssi, coref_chains, coref_representatives)
-                        output_article_text = ' '.join([' '.join(sent) for sent in raw_article_sent_tokens])
-                    else:
-                        output_article_text = ' '.join(util.reorder(raw_article_sents, ssi))
+                    output_article_text = ' '.join(util.reorder(raw_article_sents, ssi))
                     if len(ssi) == 0:
                         continue
                     if chronological_ssi and len(ssi) >= 2:

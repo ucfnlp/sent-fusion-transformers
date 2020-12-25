@@ -134,12 +134,6 @@ flags.DEFINE_integer(
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
 
-flags.DEFINE_bool(
-    "sentemb", False,
-    "Whether to lower case the input text. Should be True for uncased "
-    "models and False for cased models.")
-
-flags.DEFINE_bool("artemb", False, "Whether to use TPU or GPU/CPU.")
 
 flags.DEFINE_string(
     "model_dir", None,
@@ -151,8 +145,6 @@ if 'dataset_name' not in flags.FLAGS:
     flags.DEFINE_string('dataset_name', 'cnn_dm', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 flags.DEFINE_string('tfrecords_folder', 'tfrecords', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 
-flags.DEFINE_bool("plushidden", False, "Whether to use TPU or GPU/CPU.")
-flags.DEFINE_bool("tag_tokens", False, "Whether to use TPU or GPU/CPU.")
 flags.DEFINE_float("tag_loss_wt", 0.2, "Whether to use TPU or GPU/CPU.")
 flags.DEFINE_float("unhighlight_wt", 0.5, "Whether to use TPU or GPU/CPU.")
 flags.DEFINE_bool('use_val_test', False, 'Which dataset split to use. Must be one of {train, val, test}')
@@ -170,14 +162,9 @@ flags.DEFINE_boolean('coref_dataset', False, 'If true, save plots of each distri
 flags.DEFINE_integer('max_chains', 3, 'Beam size for beam search')
 flags.DEFINE_integer('coref_head', 4, 'Beam size for beam search')
 flags.DEFINE_integer('coref_layer', 4, 'Beam size for beam search')
-flags.DEFINE_boolean('repl', False, 'Replaces entity mentions with their Representative Mention. Warning, this will cause the coref_chains locations to be incorrect, but shouldnt be a problem since this baseline doesnt use the coref locations')
-flags.DEFINE_boolean('allcorefs', False, '')
 flags.DEFINE_boolean('link', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-flags.DEFINE_boolean('link_use_sep', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-flags.DEFINE_boolean('link_invis', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 flags.DEFINE_boolean('first_chain_only', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 flags.DEFINE_boolean('first_mention_only', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-flags.DEFINE_boolean('triples_only', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 
 np.random.seed(123)
 
@@ -327,13 +314,11 @@ class DecodeProcessor(DataProcessor):
       my_list = text.strip().split('|')
       return [self.get_delimited_list_of_lists(list_of_lists) for list_of_lists in my_list]
 
-  def remove_nonfirst_mentions(self, chain, sent2_start, summ_sent_start, triples_only):
+  def remove_nonfirst_mentions(self, chain, sent2_start, summ_sent_start):
       sent1_done = False
       sent2_done = False
       summ_sent_done = False
       new_chain = [None,None]
-      if triples_only:
-          new_chain.append(None)
       for mention in chain:
           if not sent1_done and mention[0] < sent2_start:
               new_chain[0] = mention
@@ -341,9 +326,6 @@ class DecodeProcessor(DataProcessor):
           if not sent2_done and mention[0] >= sent2_start and mention[0] < summ_sent_start:
               new_chain[1] = mention
               sent2_done = True
-          if triples_only and not summ_sent_done and mention[0] >= summ_sent_start:
-              new_chain[2] = mention
-              summ_sent_done = True
       if new_chain[0] is None or new_chain[1] is None:
           print(chain)
           print(sent2_start)
@@ -351,12 +333,6 @@ class DecodeProcessor(DataProcessor):
           print('Could not find mention for both sentences so returning full chain')
           return chain
           # raise Exception('Could not find mention for both sentences')
-      if triples_only and new_chain[2] is None:
-          print(chain)
-          print(sent2_start)
-          print(summ_sent_start)
-          print('Could not find mention for summ_sent so returning full chain')
-          return chain
       return new_chain
 
   def _create_examples(self, lines, set_type, json_lines):
@@ -386,7 +362,7 @@ class DecodeProcessor(DataProcessor):
           coref_chains = [coref_chains[0]]
       if FLAGS.first_mention_only:
           summ_sent_start = len(text_a.split(' '))
-          coref_chains = [self.remove_nonfirst_mentions(chain, sent2_start, summ_sent_start, FLAGS.triples_only) for chain in coref_chains]
+          coref_chains = [self.remove_nonfirst_mentions(chain, sent2_start, summ_sent_start) for chain in coref_chains]
 
       num_repeats = 1 if set_type == 'test' else FLAGS.input_repeat
       for _ in range(num_repeats):
@@ -621,89 +597,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
   if tokens_b:
     for token_idx, token in enumerate(tokens_b):
 
-        if FLAGS.link and FLAGS.triples_only and not FLAGS.do_predict:
-            # Add links for END of POCs
-            for chain_idx, chain in enumerate(example.coref_chains):
-
-                if chain_idx >= FLAGS.max_chains:
-                    continue
-                # if chain_idx != 0:
-                #     continue
-                for mention_idx, mention in enumerate(chain):
-                    # if mention_idx != 0:
-                    #     continue
-                    mention_position = mention[1] - summ_sent_start
-                    if mention_position in word_idx_to_wp_indices_b:
-                        try:
-                            end_wp_idx_for_mention = word_idx_to_wp_indices_b[mention_position][-1]
-                        except:
-                            print(mention[1])
-                            print(summ_sent_start)
-                            print(example.coref_chains)
-                            print(token)
-                            print(tokens_a)
-                        if token_idx == end_wp_idx_for_mention:
-                            if FLAGS.link_use_sep:
-                                poc_end_token = '[SEP]'
-                            else:
-                                poc_end_token = '[POC-%d-END]' % chain_idx
-                                # poc_end_token = ')'
-                            # # Randomly convert some of the tokens to the [MASK] token for fine-tuning
-                            # if (not FLAGS.do_predict and np.random.rand() < 0.2):
-                            #   positions.append(len(tokens))
-                            #   lm_label_tokens.append(poc_end_token)
-                            #   label_weights.append(1.0)
-                            #   tokens.append('[MASK]')
-                            # else:
-                            positions.append(len(tokens))
-                            lm_label_tokens.append(poc_end_token)
-                            label_weights.append(1.0)
-                            tokens.append('[MASK]')
-                            mappings.append(-1)
-                            segment_ids.append(1)
-                            cur_idx += 1
-                            num_segment_2 += 1
-            # Add links for START of POCs
-            for chain_idx, chain in enumerate(example.coref_chains):
-                if chain_idx >= FLAGS.max_chains:
-                    continue
-                # if chain_idx != 0:
-                #     continue
-                for mention_idx, mention in enumerate(chain):
-                    # if mention_idx != 0:
-                    #     continue
-                    mention_position = mention[0] - summ_sent_start
-                    if mention_position in word_idx_to_wp_indices_b:
-                        try:
-                            start_wp_idx_for_mention = word_idx_to_wp_indices_b[mention_position][0]
-                        except:
-                            print(mention[0])
-                            print(summ_sent_start)
-                            print(example.coref_chains)
-                            print(token)
-                            print(tokens_a)
-                        if token_idx == start_wp_idx_for_mention:
-                            if FLAGS.link_use_sep:
-                                poc_start_token = '[SEP]'
-                            else:
-                                poc_start_token = '[POC-%d-START]' % chain_idx
-                                # poc_start_token = '('
-                            # # Randomly convert some of the tokens to the [MASK] token for fine-tuning
-                            # if (not FLAGS.do_predict and np.random.rand() < 0.2):
-                            #   positions.append(len(tokens))
-                            #   lm_label_tokens.append(poc_start_token)
-                            #   label_weights.append(1.0)
-                            #   tokens.append('[MASK]')
-                            # else:
-                            positions.append(len(tokens))
-                            lm_label_tokens.append(poc_start_token)
-                            label_weights.append(1.0)
-                            tokens.append('[MASK]')
-                            mappings.append(-1)
-                            segment_ids.append(1)
-                            cur_idx += 1
-                            num_segment_2 += 1
-
         # Randomly convert some of the tokens to the [MASK] token for fine-tuning
         if (FLAGS.do_predict and token_idx == len(tokens_b)-1) or (not FLAGS.do_predict and np.random.rand() < FLAGS.mask_prob):
             positions.append(len(tokens))
@@ -768,17 +661,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
           assert np.sum(which) <= FLAGS.max_chains
 
       coref_unique_masks_flattened = coref_unique_masks.flatten().tolist()
-  elif FLAGS.link and FLAGS.link_invis:
-      coref_unique_masks = np.ones([FLAGS.max_chains + 1, max_seq_length])
-      which_coref_mask = np.zeros([max_seq_length, FLAGS.max_chains+1], dtype=np.int32)
-      link_token_indices = [token_idx for token_idx, token in enumerate(tokens) if token in ['[POC-0-START]', '[POC-0-END]','[POC-1-START]', '[POC-1-END]','[POC-2-START]', '[POC-2-END]']]
-      link_and_mask_token_indices = [token_idx for token_idx, token in enumerate(tokens) if token in ['[MASK]','[POC-0-START]', '[POC-0-END]','[POC-1-START]', '[POC-1-END]','[POC-2-START]', '[POC-2-END]']]
-      nonlink_token_indices = [token_idx for token_idx, token in enumerate(tokens) if token not in ['[POC-0-START]', '[POC-0-END]','[POC-1-START]', '[POC-1-END]','[POC-2-START]', '[POC-2-END]']]
-      coref_unique_masks[0,link_token_indices] = 0
-      which_coref_mask[link_and_mask_token_indices, 1] = 1
-      which_coref_mask[nonlink_token_indices, 0] = 1
-      coref_unique_masks_flattened = coref_unique_masks.flatten().tolist()
-      which_coref_mask_flattened = which_coref_mask.flatten().tolist()
   else:
       coref_attentions = np.zeros([max_seq_length, max_seq_length])
       coref_attentions_flattened = coref_attentions.flatten().tolist()
@@ -1236,9 +1118,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     pre_input_mask_2d = tf.zeros_like(input_mask_2d)
     if FLAGS.coref:
         coref_attentions = ((coref_attentions - 1) * 10000) + 1
-    elif FLAGS.link_invis:
-        pre_input_mask_2d = input_mask_2d
-        input_mask_2d = tf.logical_and(pre_input_mask_2d, tf.cast(coref_attentions, tf.bool))
 
 
 
@@ -1562,8 +1441,6 @@ class BertRun:
 
       data_root = os.path.expanduser('~') + '/coref/data/bert'
       output_folder = 'output_decoding'
-      if FLAGS.repl and FLAGS.coref:
-          raise Exception('Cannot run with --repl and --coref at the same time. If you want to do coreference replacement, then you cannot use the decoder that incorporates coref info.')
       if FLAGS.coref_dataset or ('poc_dataset' in FLAGS and FLAGS.poc_dataset):
           output_folder += '_crd'
       if FLAGS.coref:
@@ -1571,22 +1448,10 @@ class BertRun:
           output_folder += '_l%d_h%d' % (FLAGS.coref_layer, FLAGS.coref_head)
       if FLAGS.link:
           output_folder += '_link'
-      if FLAGS.link_invis:
-          output_folder += '_invis'
       if FLAGS.first_chain_only:
           output_folder += '_fc'
       if FLAGS.first_mention_only:
           output_folder += '_fm'
-      if FLAGS.link_use_sep:
-          output_folder += '_use_sep'
-      if FLAGS.allcorefs:
-          output_folder += '_allcorefs'
-      if FLAGS.repl:
-          output_folder += '_repl'
-      if FLAGS.triples_only:
-          output_folder += '_triples'
-      if FLAGS.tag_tokens:
-          output_folder += '_tag' + str(FLAGS.tag_loss_wt)
       if FLAGS.small_training:
           output_folder += '_small'
       # output_folder += '_lr%.1E' % FLAGS.learning_rate
@@ -1602,12 +1467,6 @@ class BertRun:
       FLAGS.data_dir = os.path.join(data_root, FLAGS.dataset_name, FLAGS.singles_and_pairs, 'input_decoding')
       if FLAGS.coref_dataset:
           FLAGS.data_dir += '_crd'
-      if FLAGS.allcorefs:
-          FLAGS.data_dir += '_allcorefs'
-      if FLAGS.repl:
-          FLAGS.data_dir += '_repl'
-      if FLAGS.triples_only:
-          FLAGS.data_dir += '_summinc_triples'
       FLAGS.output_dir = os.path.join(data_root, FLAGS.dataset_name, FLAGS.singles_and_pairs, output_folder)
 
       if FLAGS.small_training:
@@ -1755,22 +1614,12 @@ class BertRun:
             eval_file_name += '_crd'
         if FLAGS.coref:
             eval_file_name += '_coref'
-        if FLAGS.allcorefs:
-            eval_file_name += '_allcorefs'
-        if FLAGS.repl:
-            eval_file_name += '_repl'
         if FLAGS.link:
             eval_file_name += '_link'
-        if FLAGS.link_invis and FLAGS.link:
-            eval_file_name += '_invis'
         if FLAGS.first_chain_only:
             eval_file_name += '_fc'
         if FLAGS.first_mention_only:
             eval_file_name += '_fm'
-        if FLAGS.link_use_sep:
-            eval_file_name += '_use_sep'
-        if FLAGS.triples_only:
-            eval_file_name += '_triples'
         eval_file = os.path.join(os.path.dirname(FLAGS.output_dir), FLAGS.tfrecords_folder, eval_file_name + ".tf_record")
         create_dirs(os.path.dirname(eval_file))
         if not os.path.exists(eval_file) or FLAGS.small_training:
@@ -1814,22 +1663,12 @@ class BertRun:
             train_file_name += '_crd'
         if FLAGS.coref:
             train_file_name += '_coref'
-        if FLAGS.allcorefs:
-            train_file_name += '_allcorefs'
-        if FLAGS.repl:
-            train_file_name += '_repl'
         if FLAGS.link:
             train_file_name += '_link'
-        if FLAGS.link_invis and FLAGS.link:
-            train_file_name += '_invis'
         if FLAGS.first_chain_only:
             train_file_name += '_fc'
         if FLAGS.first_mention_only:
             train_file_name += '_fm'
-        if FLAGS.link_use_sep:
-            train_file_name += '_use_sep'
-        if FLAGS.triples_only:
-            train_file_name += '_triples'
         train_file = os.path.join(os.path.dirname(FLAGS.output_dir), FLAGS.tfrecords_folder, train_file_name + ".tf_record")
         create_dirs(os.path.dirname(train_file))
         if not os.path.exists(train_file) or FLAGS.small_training:
@@ -1883,18 +1722,8 @@ class BertRun:
             predict_name += '_crd'
         if FLAGS.coref:
             predict_name += '_coref'
-        if FLAGS.allcorefs:
-            predict_name += '_allcorefs'
-        if FLAGS.repl:
-            predict_name += '_repl'
         if FLAGS.link:
             predict_name += '_link'
-        if FLAGS.link_invis and FLAGS.link:
-            predict_name += '_invis'
-        if FLAGS.link_use_sep:
-            predict_name += '_use_sep'
-        if FLAGS.triples_only:
-            predict_name += '_triples'
         # predict_example_generator = processor.get_test_examples(FLAGS.data_dir)
         # num_actual_predict_examples = num_lines_in_file(os.path.join(FLAGS.data_dir, dataset_split + '.tsv')) - 1
         # if FLAGS.use_tpu:
