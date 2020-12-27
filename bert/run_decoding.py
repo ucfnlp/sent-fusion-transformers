@@ -145,9 +145,6 @@ if 'dataset_name' not in flags.FLAGS:
     flags.DEFINE_string('dataset_name', 'cnn_dm', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 flags.DEFINE_string('tfrecords_folder', 'tfrecords', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 
-flags.DEFINE_float("tag_loss_wt", 0.2, "Whether to use TPU or GPU/CPU.")
-flags.DEFINE_float("unhighlight_wt", 0.5, "Whether to use TPU or GPU/CPU.")
-flags.DEFINE_bool('use_val_test', False, 'Which dataset split to use. Must be one of {train, val, test}')
 flags.DEFINE_float("mask_prob", 0.7, "Whether to use TPU or GPU/CPU.")
 flags.DEFINE_integer("max_predictions_per_seq", 100,
                      "Maximum number of masked LM predictions per sequence.")
@@ -799,8 +796,8 @@ def file_based_convert_examples_to_features(
   writer = tf.python_io.TFRecordWriter(output_file)
 
   print("Writing examples to .tfrecord file")
-  num_repeats = 1 if 'test' in output_file else FLAGS.input_repeat
-  for (ex_index, example) in enumerate(tqdm(example_generator, total=num_examples*num_repeats)):
+  # num_repeats = 1 if 'test' in output_file else FLAGS.input_repeat
+  for (ex_index, example) in enumerate(tqdm(example_generator, total=num_examples)):
 
     feature = convert_single_example(ex_index, example, label_list,
                                      max_seq_length, tokenizer)
@@ -1439,7 +1436,9 @@ class BertRun:
       tokenization.validate_case_matches_checkpoint(FLAGS.do_lower_case,
                                                     FLAGS.init_checkpoint)
 
-      data_root = os.path.expanduser('~') + '/coref/data/bert'
+      data_root = 'data/bert'
+      if not os.path.exists(data_root):
+          data_root = '../data/bert'
       output_folder = 'output_decoding'
       if FLAGS.coref_dataset or ('poc_dataset' in FLAGS and FLAGS.poc_dataset):
           output_folder += '_crd'
@@ -1473,7 +1472,9 @@ class BertRun:
           FLAGS.tfrecords_folder += '_small'
 
       if FLAGS.link:
-          FLAGS.vocab_file = os.path.expanduser('~') + "/coref/logs/vocab_link.txt"
+          FLAGS.vocab_file = "logs/vocab_link.txt"
+          if not os.path.exists(FLAGS.vocab_file):
+              FLAGS.vocab_file = "../logs/vocab_link.txt"
 
       print(bcolors.WARNING + "Experiment path: " + FLAGS.output_dir + bcolors.ENDC)
 
@@ -1712,12 +1713,8 @@ class BertRun:
       processor = self.processor
 
       if FLAGS.do_predict:
-        if FLAGS.use_val_test:
-            dataset_split = 'val_test'
-            predict_name = 'val_predict'
-        else:
-            dataset_split = 'test'
-            predict_name = 'predict'
+        dataset_split = 'test'
+        predict_name = 'predict'
         if FLAGS.coref_dataset:
             predict_name += '_crd'
         if FLAGS.coref:

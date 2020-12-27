@@ -24,26 +24,12 @@ if 'resolver' not in flags.FLAGS:
     flags.DEFINE_string('resolver', 'spacy', 'Max number of sentences to include for merging.')
 if 'save_dataset' not in flags.FLAGS:
     flags.DEFINE_boolean('save_dataset', True, 'Max number of sentences to include for merging.')
-if 'summinc' not in flags.FLAGS:
-    flags.DEFINE_boolean('summinc', False, 'Max number of sentences to include for merging.')
-if 'allcorefs' not in flags.FLAGS:
-    flags.DEFINE_boolean('allcorefs', False, 'Max number of sentences to include for merging.')
-if 'triples_only' not in flags.FLAGS:
-    flags.DEFINE_boolean('triples_only', False, 'Max number of sentences to include for merging.')
 
 FLAGS(sys.argv)
 
 
 data_dir = os.path.expanduser('~') + '/data/tf_data/with_coref_and_ssi_and_tag_tokens'
-if FLAGS.resolver != 'stanford':
-    data_dir += '_' + FLAGS.resolver
-if FLAGS.summinc:
-    data_dir += '_summinc'
-if FLAGS.triples_only:
-    data_dir += '_triples'
 dataset_dir = data_dir
-if FLAGS.allcorefs:
-    dataset_dir += '_allcorefs'
 dataset_dir = os.path.join(dataset_dir + '_fusions', FLAGS.dataset_name)
 dataset_full_dir = os.path.join(dataset_dir, 'all')
 ssi_dir = 'data/ssi'
@@ -53,12 +39,6 @@ names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices
 min_matched_tokens = 1
 
 out_dir = os.path.join(ssi_dir, 'coref_fusions')
-if FLAGS.resolver != 'stanford':
-    out_dir += '_' + FLAGS.resolver
-if FLAGS.summinc:
-    out_dir += '_summinc'
-if FLAGS.triples_only:
-    out_dir += '_triples'
 
 def get_coref_pairs(corefs):
     coref_pairs = set()
@@ -70,27 +50,6 @@ def get_coref_pairs(corefs):
         pairs = list(itertools.combinations(sorted(list(sent_indices)), 2))
         coref_pairs = coref_pairs.union(pairs)
     return list(coref_pairs)
-
-def get_coref_triples_summinc(corefs, num_summ_sents):
-    coref_pairs = set()
-    for coref in corefs:
-        sent_indices = set()
-        for m in coref:
-            sent_idx = m['sentNum'] - 1
-            sent_indices.add(sent_idx)
-        triples = list(itertools.combinations(sorted(list(sent_indices)), 3))
-        pair_summinc = []
-        for triple in triples:
-            is_valid_triple = True
-            if triple[0] >= num_summ_sents:
-                is_valid_triple = False
-            if triple[1] < num_summ_sents or triple[2] < num_summ_sents:
-                is_valid_triple = False
-            if is_valid_triple:
-                pair_summinc.append(triple)
-
-        coref_triples = coref_pairs.union(pair_summinc)
-    return list(coref_triples)
 
 def get_coref_chain_locations(corefs):
     coref_chain_locations = []
@@ -112,12 +71,6 @@ def get_coref_fusion_pairs(coref_pairs, groundtruth_similar_source_indices_list)
     coref_fusions = list(set(coref_pairs).intersection(set(groundtruth_similar_source_indices_list)))
     return coref_fusions
 
-def get_coref_fusion_triples(coref_triples, gt_ssi_list):
-    shifted_ssi_list = [[source_idx + len(gt_ssi_list) for source_idx in source_indices] for source_indices in gt_ssi_list]
-    gt_ssi_list_triples = [tuple([summ_sent_idx] + source_indices) for summ_sent_idx, source_indices in enumerate(shifted_ssi_list)]
-    coref_fusions = list(set(coref_triples).intersection(set(gt_ssi_list_triples)))
-    return coref_fusions, gt_ssi_list_triples
-
 def get_fusion_locations(coref_chain_locations, groundtruth_similar_source_indices_list):
     new_locations = []
     coref_representatives = []
@@ -131,25 +84,12 @@ def get_fusion_locations(coref_chain_locations, groundtruth_similar_source_indic
             coref_representatives.append(chain[0][3])
     return new_locations, coref_representatives
 
-def get_fusion_locations_triples(coref_chain_locations, gt_ssi_list_triples):
-    new_locations = []
-    coref_representatives = []
-    for chain in coref_chain_locations:
-        triples = list(itertools.combinations(chain, 3))
-        fusion_triples = [triple for triple in triples if (triple[0][0], triple[1][0], triple[2][0]) in gt_ssi_list_triples]
-        valid_locs = list(set(util.flatten_list_of_lists(fusion_triples)))
-        if len(valid_locs) > 0:
-            new_locations.append(valid_locs)
-            coref_representatives.append(chain[0][3])
-    return new_locations, coref_representatives
-
-def filter_only_for_one_fusion(source_indices, fusion_locations, allcorefs=False, triples_only=False):
+def filter_only_for_one_fusion(source_indices, fusion_locations):
     new_fusion_locations = []
     for chain in fusion_locations:
         new_chain = []
         first = False
         second = False
-        third = False
         for mention in chain:
             if mention[0] == source_indices[0]:
                 first = True
@@ -163,14 +103,8 @@ def filter_only_for_one_fusion(source_indices, fusion_locations, allcorefs=False
                 new_mention[0] = 1
                 new_mention = tuple(new_mention)
                 new_chain.append(new_mention)
-            elif triples_only and mention[0] == source_indices[2]:
-                third = True
-                new_mention = list(mention[:3])     # exclude representative mention entry
-                new_mention[0] = 2
-                new_mention = tuple(new_mention)
-                new_chain.append(new_mention)
 
-        if (allcorefs and len(new_chain) > 0) or (not triples_only and first and second) or (triples_only and first and second and third):
+        if first and second:
             new_fusion_locations.append(new_chain)
     return new_fusion_locations
 
@@ -226,8 +160,6 @@ def main(unused_argv):
                 break
             raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, corefs, doc_indices, article_lcs_paths_list = util.unpack_tf_example(
                 example, names_to_types)
-            if FLAGS.triples_only:
-                groundtruth_similar_source_indices_list = [(0,1)]
             article_sent_tokens = [util.process_sent(sent, whitespace=True) for sent in raw_article_sents]
             groundtruth_summ_sents = [[sent.strip() for sent in groundtruth_summary_text.strip().split('\n')]]
             if doc_indices is None:
@@ -246,26 +178,12 @@ def main(unused_argv):
             smooth_article_paths_list = util.enforce_sentence_limit(smooth_article_paths_list, 3)
             simple_similar_source_indices, smooth_article_paths_list = util.make_ssi_chronological(simple_similar_source_indices, smooth_article_paths_list)
 
-            if FLAGS.summinc:
-                if len(corefs) == 0:
-                    continue
-                coref_triples = get_coref_triples_summinc(corefs, len(groundtruth_summ_sents[0]))
-                coref_chain_locations = get_coref_chain_locations(corefs)
-                coref_fusions, gt_ssi_list_triples = get_coref_fusion_triples(coref_triples, groundtruth_similar_source_indices_list)   # list of source_indices. Each source_indices is a triple (summ_sent_idx, source1_idx, source2idx)
-                if len(coref_triples) > 0:
-                    for source_indices in gt_ssi_list_triples:
-                        if len(source_indices) == 3:
-                            a=0
-                    a=0
-                fusion_locations, coref_representatives = get_fusion_locations_triples(coref_chain_locations, gt_ssi_list_triples)
-                summ_fusion_locations, article_fusion_locations = filter_summ_locations(fusion_locations, len(groundtruth_summ_sents[0]))
-            else:
-                coref_pairs = get_coref_pairs(corefs)
-                coref_chain_locations = get_coref_chain_locations(corefs)   # list of chains. Each chain is a list of locs. Each loc is a 4-tuple (sent_idx, start, end, coref_representative)
-                coref_fusions = get_coref_fusion_pairs(coref_pairs, groundtruth_similar_source_indices_list)    # list of source_indices. Each source_indices is a pair (source1_idx, source2idx)
-                fusion_locations, coref_representatives = get_fusion_locations(coref_chain_locations, groundtruth_similar_source_indices_list)     # list of locs. Each loc is a 4-tuple (sent_idx, start, end, coref_representative)
-                article_fusion_locations = fusion_locations
-                summ_fusion_locations = None
+            coref_pairs = get_coref_pairs(corefs)
+            coref_chain_locations = get_coref_chain_locations(corefs)   # list of chains. Each chain is a list of locs. Each loc is a 4-tuple (sent_idx, start, end, coref_representative)
+            coref_fusions = get_coref_fusion_pairs(coref_pairs, groundtruth_similar_source_indices_list)    # list of source_indices. Each source_indices is a pair (source1_idx, source2idx)
+            fusion_locations, coref_representatives = get_fusion_locations(coref_chain_locations, groundtruth_similar_source_indices_list)     # list of locs. Each loc is a 4-tuple (sent_idx, start, end, coref_representative)
+            article_fusion_locations = fusion_locations
+            summ_fusion_locations = None
 
             if len(coref_fusions) > 0:
                 if coref_fusion_found_idx < 200:
@@ -277,15 +195,9 @@ def main(unused_argv):
                 if FLAGS.save_dataset:
                     for source_indices in coref_fusions:
                         my_ssi_list = [source_indices]
-                        if FLAGS.triples_only:
-                            summ_sent_idx = 0
-                        else:
-                            summ_sent_idx = get_summ_sent_idx(source_indices, groundtruth_similar_source_indices_list)
+                        summ_sent_idx = get_summ_sent_idx(source_indices, groundtruth_similar_source_indices_list)
                         my_summary_text = groundtruth_summ_sents[0][summ_sent_idx]
-                        if FLAGS.allcorefs:
-                            my_coref_chains = filter_only_for_one_fusion(source_indices, coref_chain_locations, allcorefs=True, triples_only=FLAGS.triples_only)
-                        else:
-                            my_coref_chains = filter_only_for_one_fusion(source_indices, fusion_locations, allcorefs=False, triples_only=FLAGS.triples_only)
+                        my_coref_chains = filter_only_for_one_fusion(source_indices, fusion_locations)
                         my_article_lcs_paths_list = [article_lcs_paths_list[summ_sent_idx]]
                         new_tf_example = util.make_tf_example(my_ssi_list, raw_article_sents,
                                                               my_summary_text,
