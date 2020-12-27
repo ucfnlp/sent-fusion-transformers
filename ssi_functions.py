@@ -3,29 +3,14 @@ import os
 import util
 import numpy as np
 
+
 # @profile
 def write_highlighted_html(html, out_dir, example_idx):
     html = '''
-    
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-span {
-  font-family:helvetica;
-}
-</style>
-</head>
-<body>
 
 <button id="btnPrev" class="float-left submit-button" >Prev</button>
 <button id="btnNext" class="float-left submit-button" >Next</button>
-<span>(You may also use the left and right arrow keys)</span>
 <br><br>
-
-<span>The designated <b>summary</b> sentence was created by <b>fusing</b> the two designated <b>article</b> sentences together. 
-The highlighted spans of a single color (e.g. blue) represent a <b>Point of Correspondence</b>. 
-There may be multiple Points of Correspondence. Each Point of Correspondence also has a <b>type</b>, which can be one of the following: {Nominal, Pronominal, Common-Noun, Repetition, Event}. </span>
 
 <script type="text/javascript">
     document.getElementById("btnPrev").onclick = function () {
@@ -51,20 +36,15 @@ There may be multiple Points of Correspondence. Each Point of Correspondence als
 </script>
 
 ''' % (example_idx - 1, example_idx + 1) + html
-    html += '''
-</body>
-</html>
-'''
     util.create_dirs(out_dir)
     path = os.path.join(out_dir, '%06d_highlighted.html' % example_idx)
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, 'w') as f:
         f.write(html)
 
 highlight_colors = ['aqua', 'lime', 'yellow', '#FF7676', '#B9968D', '#D7BDE2', '#8C8DFF', '#D6DBDF', '#F852AF', '#00FF8B', '#FD933A', '#965DFF']
 hard_highlight_colors = ['#00BBFF', '#00BB00', '#F4D03F', '#BB5454', '#A16252', '#AF7AC5', '#6668FF', '#AEB6BF', '#FF008F', '#0ECA74', '#FF7400', '#7931FF']
 underline_colors = hard_highlight_colors[::-1]
 # hard_highlight_colors = ['blue', 'green', 'orange', 'red']
-font = 'arial'
 
 def start_tag_highlight(color, bottom_color=None):
     if bottom_color is not None:
@@ -102,95 +82,8 @@ def determine_start_tag_underline(fusion_locations, sent_idx, token_idx):
     if my_chain_idx == -1:
         color = 'white'
     else:
-        color = highlight_colors[my_chain_idx]
-    return start_tag_highlight(color)
-
-
-def html_highlight_poc(summary_sent_tokens, similar_source_indices_list,
-                                    article_sent_tokens, doc_indices=None, lcs_paths_list=None, article_lcs_paths_list=None, gt_similar_source_indices_list=None,
-                                    gt_article_lcs_paths_list=None, fusion_locations=None, summ_fusion_locations=None, poc_types=None, fused_sent_idx=None):
-    end_tag = "</span>"
-    out_str = ''
-
-    out_str += '<h1 style="font-family:helvetica;">Points of Correspondence</h1>'
-    for idx, poc_type in enumerate(poc_types):
-        color = highlight_colors[idx]
-        start_tag = start_tag_highlight(color)
-        insert_string = start_tag + poc_type + end_tag + '<br>'
-        out_str += insert_string
-    if len(poc_types) == 0:
-        out_str += '<span>[no points of correspondences found]</span><br>'
-    out_str += '<br>'
-
-    out_str += '<h1 style="font-family:helvetica;">Summary</h1>'
-    for summ_sent_idx, summ_sent in enumerate(summary_sent_tokens):
-        similar_source_indices = [0] * len(summary_sent_tokens)
-
-        if fused_sent_idx == summ_sent_idx:
-            out_str += '<div style="border:3px; border-style:solid; border-color:#FF0000; padding: 0.5em;">'
-        else:
-            out_str == '<div>'
-
-        for token_idx, token in enumerate(summ_sent):
-            insert_string = token + ' '
-            for source_indices_idx, source_indices in enumerate(similar_source_indices):
-                if summ_fusion_locations is not None:
-                    start_underline = determine_start_tag_underline(summ_fusion_locations, summ_sent_idx, token_idx)
-                else:
-                    start_underline = '<span>'
-                insert_string = start_underline + token + ' ' + end_tag
-            out_str += insert_string
-        out_str += '</div>'
-        out_str += '<br>'
-        if fused_sent_idx != summ_sent_idx:
-            out_str += '<br>'
-
-    out_str += '<h1 style="font-family:helvetica;">Article</h1>'
-    cur_token_idx = 0
-    cur_doc_idx = 0
-    for sent_idx, sent in enumerate(article_sent_tokens):
-
-        if sent_idx in similar_source_indices_list[0]:
-            out_str += '<div style="border:3px; border-style:solid; border-color:#FF0000; padding: 0.25em;">'
-        else:
-            out_str == '<div>'
-
-        if doc_indices is not None:
-            if cur_token_idx >= len(doc_indices):
-                print("Warning: cur_token_idx is greater than len of doc_indices")
-            elif doc_indices[cur_token_idx] != cur_doc_idx:
-                cur_doc_idx = doc_indices[cur_token_idx]
-                out_str += '<br>'
-        summ_sent_indices, priorities = get_idx_for_source_idx(similar_source_indices_list, sent_idx)   # summ_sent_indices is what summ_sents are represented in this source sent (e.g. [0, 1, 4]). It's usually 1 summ sent.
-                                                                                                        # priorities is 0 if it is the primary article sent. 1 if it is the secondary article sent.
-        if priorities is not None:
-            colors = [highlight_colors[min(summ_sent_idx, len(highlight_colors)-1)] for summ_sent_idx in summ_sent_indices]
-            hard_colors = [hard_highlight_colors[min(summ_sent_idx, len(highlight_colors)-1)] for summ_sent_idx in summ_sent_indices]
-        if gt_similar_source_indices_list is not None:
-            gt_summ_sent_indices, gt_priorities = get_idx_for_source_idx(gt_similar_source_indices_list, sent_idx)   # summ_sent_indices is what summ_sents are represented in this source sent (e.g. [0, 1, 4]). It's usually 1 summ sent.
-                                                                                                        # priorities is 0 if it is the primary article sent. 1 if it is the secondary article sent.
-            if gt_priorities is not None:
-                gt_colors = [highlight_colors[min(summ_sent_idx, len(highlight_colors) - 1)] for summ_sent_idx in
-                             gt_summ_sent_indices]
-                gt_hard_colors = [hard_highlight_colors[min(summ_sent_idx, len(highlight_colors) - 1)] for summ_sent_idx in
-                                  gt_summ_sent_indices]
-        source_sentence = article_sent_tokens[sent_idx]
-        out_str += "<p style='margin:5px'>"
-        for token_idx, token in enumerate(source_sentence):
-            if fusion_locations is not None:
-                start_underline = determine_start_tag_underline(fusion_locations, sent_idx, token_idx)
-            else:
-                start_underline = '<span>'
-            insert_string = start_underline + token + ' ' + end_tag
-            # else:
-                # insert_string = start_tag_highlight(highlight_colors[priority]) + token + end_tag
-            cur_token_idx += 1
-            out_str += insert_string
-        # out_str += '<br style="line-height: 400%;">'
-        out_str += "</p>"
-        out_str += '</div>'
-    out_str += '<br>------------------------------------------------------<br><br>'
-    return out_str
+        color = underline_colors[my_chain_idx]
+    return start_tag_underline(color)
 
 
 def html_highlight_sents_in_article(summary_sent_tokens, similar_source_indices_list,

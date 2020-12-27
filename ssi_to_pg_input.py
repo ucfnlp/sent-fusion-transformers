@@ -2,18 +2,10 @@ import glob
 
 import numpy as np
 import os
-import time
-from tqdm import tqdm
 
-import tensorflow as tf
-from collections import namedtuple
-
-import data
 import util
-from data import Vocab
-from decode import BeamSearchDecoder, decode_example
-import pickle
-from absl import app, flags, logging
+from decode import BeamSearchDecoder
+from absl import app, flags
 import random
 
 random.seed(222)
@@ -23,7 +15,7 @@ FLAGS = flags.FLAGS
 if 'dataset_name' not in flags.FLAGS:
     flags.DEFINE_string('dataset_name', 'cnn_dm', 'Which dataset to use. Makes a log dir based on name.\
                                                 Must be one of {tac_2011, tac_2008, duc_2004, duc_tac, cnn_dm} or a custom dataset name')
-flags.DEFINE_string('data_root', os.path.expanduser('~') + '/data/tf_data/with_coref_and_ssi_and_tag_tokens', 'Path to root directory for all datasets (already converted to TensorFlow examples).')
+flags.DEFINE_string('data_root', 'data', 'Path to root directory for all datasets (already converted to TensorFlow examples).')
 flags.DEFINE_string('vocab_path', 'logs/vocab', 'Path expression to text vocabulary file.')
 flags.DEFINE_string('pretrained_path', '', 'Directory of pretrained model for PG trained on singles or pairs of sentences.')
 flags.DEFINE_boolean('use_pretrained', True, 'If True, use pretrained model in the path FLAGS.pretrained_path.')
@@ -102,17 +94,6 @@ def main(unused_argv):
     if len(unused_argv) != 1: # prints a message if you've entered flags incorrectly
         raise Exception("Problem with flags: %s" % unused_argv)
 
-    if FLAGS.poc_dataset:
-        names_to_types = [('raw_article_sents', 'string_list'), ('summary_text', 'string'), ('coref_chains', 'delimited_list_of_list_of_lists')]
-    elif FLAGS.coref_dataset:
-        # names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices', 'delimited_list_of_tuples'), ('summary_text', 'string'),
-        #                   ('article_lcs_paths_list', 'delimited_list_of_list_of_lists'), ('coref_chains', 'delimited_list_of_list_of_lists'), ('coref_representatives', 'string_list')]
-        names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices', 'delimited_list_of_tuples'), ('summary_text', 'string'),
-                          ('article_lcs_paths_list', 'delimited_list_of_list_of_lists'), ('coref_chains', 'delimited_list_of_list_of_lists')]
-    else:
-        names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices', 'delimited_list_of_tuples'), ('summary_text', 'string'), ('corefs', 'json'), ('article_lcs_paths_list', 'delimited_list_of_list_of_lists')]
-
-
     extractor = 'bert'
     pretrained_dataset = FLAGS.dataset_name
     if FLAGS.coref_dataset or FLAGS.poc_dataset:
@@ -138,23 +119,11 @@ def main(unused_argv):
     if FLAGS.first_mention_only:
         FLAGS.exp_name += '_fm'
 
-    if FLAGS.coref_dataset:
-        FLAGS.data_root += '_fusions'
-    if FLAGS.poc_dataset:
-        FLAGS.data_root = os.path.expanduser('~') + '/data/tf_data/poc_fusions'
-
 
     ssi_list = None
 
 
     print('Exp_name: %s' % FLAGS.exp_name)
-
-    if FLAGS.dataset_name != "":
-        FLAGS.data_path = os.path.join(FLAGS.data_root, FLAGS.dataset_name, FLAGS.dataset_split + '*')
-    print(util.bcolors.WARNING + "Data path: " + FLAGS.data_path)
-    if not os.path.exists(os.path.join(FLAGS.data_root, FLAGS.dataset_name)) or len(os.listdir(os.path.join(FLAGS.data_root, FLAGS.dataset_name))) == 0:
-        print(('No TF example data found at %s' % os.path.join(FLAGS.data_root, FLAGS.dataset_name)))
-        raise
 
     # Change log_root to FLAGS.log_root/FLAGS.exp_name and create the dir if necessary
     FLAGS.exp_name = FLAGS.exp_name if FLAGS.exp_name != '' else FLAGS.dataset_name
@@ -171,36 +140,25 @@ def main(unused_argv):
         raise Exception('No vocab file for dataset created. Run make_vocab.py --dataset_name=<my original dataset name>')
     original_dataset_name = original_dataset_name[0]
     FLAGS.original_dataset_name = original_dataset_name
-    vocab = Vocab(FLAGS.vocab_path + '_' + original_dataset_name, FLAGS.vocab_size, add_sep=FLAGS.sep) # create a vocabulary
 
     # If in decode mode, set batch_size = beam_size
     # Reason: in decode mode, we decode one example at a time.
     # On each step, we have beam_size-many hypotheses in the beam, so we need to make a batch of these hypotheses.
     if FLAGS.mode == 'decode':
         FLAGS.batch_size = FLAGS.beam_size
-
-    hparam_list = [item for item in list(FLAGS.flag_values_dict().keys()) if item != '?']
-    hps_dict = {}
-    for key,val in FLAGS.__flags.items(): # for each flag
-        if key in hparam_list: # if it's in the list
-            hps_dict[key] = val.value # add it to the dict
-    hps = namedtuple("HParams", list(hps_dict.keys()))(**hps_dict)
-
-    # tf.set_random_seed(113) # a seed value for randomness
-
-    decode_model_hps = hps._replace(
-        max_dec_steps=1)  # The model is configured with max_dec_steps=1 because we only ever run one step of the decoder at a time (to do beam search). Note that the batcher is initialized with max_dec_steps equal to e.g. 100 because the batches need to contain the full summaries
-
     if len(unused_argv) != 1:  # prints a message if you've entered flags incorrectly
         raise Exception("Problem with flags: %s" % unused_argv)
     np.random.seed(random_seed)
-    source_dir = os.path.join(FLAGS.data_root, dataset_articles)
+    source_dir = os.path.join('data', 'input_decoding')
+    if FLAGS.poc_dataset:
+        source_dir += '_pocd'
+    else:
+        source_dir += '_crd'
+    source_data_path = os.path.join(source_dir, FLAGS.dataset_split + '.tsv')
 
-    example_generator = data.example_generator(source_dir + '/' + FLAGS.dataset_split + '*', True, False,
-                                               should_check_valid=False)
     model = None
-    decoder = BeamSearchDecoder(model, None, vocab)
-    decoder.decode_iteratively(example_generator, num_test_examples, names_to_types, ssi_list, hps)
+    decoder = BeamSearchDecoder(model, None)
+    decoder.decode_iteratively(source_data_path, num_test_examples, ssi_list)
 
 
 if __name__ == '__main__':

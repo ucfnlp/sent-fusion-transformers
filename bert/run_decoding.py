@@ -25,6 +25,7 @@ import tokenization
 import tensorflow as tf
 import numpy as np
 from collections import Counter
+import json
 
 from best_checkpoint_copier import BestCheckpointCopier
 from tqdm import tqdm
@@ -317,6 +318,14 @@ class DecodeProcessor(DataProcessor):
       summ_sent_done = False
       new_chain = [None,None]
       for mention in chain:
+          try:
+              a=mention[0]
+          except:
+              print(mention)
+              print(chain)
+              print(sent2_start)
+              print(summ_sent_start)
+              raise
           if not sent1_done and mention[0] < sent2_start:
               new_chain[0] = mention
               sent1_done = True
@@ -349,10 +358,16 @@ class DecodeProcessor(DataProcessor):
         text_b = text_b.replace('\xa0','-')
       else:
         text_b = None
-      sentence_ids = [int(idx) for idx in line[4].split()]
-      sent2_start = int(line[5])
+      sentence_ids = [0, 1]
+      sent2_start = int(line[4])
       if FLAGS.coref or FLAGS.link:
-        coref_chains = self.get_delimited_list_of_list_of_lists(line[6])
+        coref_chains_dict = json.loads(line[5])
+        coref_chains = []
+        for chain_id in sorted(list(coref_chains_dict.keys())):
+            chain_to_add = []
+            for mention in coref_chains_dict[chain_id]:
+                chain_to_add.append((mention['start'], mention['end']))
+            coref_chains.append(chain_to_add)
       else:
         coref_chains = None
       if FLAGS.first_chain_only:
@@ -505,11 +520,8 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
                     print(token)
                     print(tokens_a)
                   if token_idx == end_wp_idx_for_mention:
-                    if FLAGS.link_use_sep:
-                      poc_end_token = '[SEP]'
-                    else:
-                      poc_end_token = '[POC-%d-END]' % chain_idx
-                      # poc_end_token = ')'
+                    poc_end_token = '[POC-%d-END]' % chain_idx
+                    # poc_end_token = ')'
                     # # Randomly convert some of the tokens to the [MASK] token for fine-tuning
                     # if (not FLAGS.do_predict and np.random.rand() < 0.2):
                     #   positions.append(len(tokens))
@@ -540,11 +552,8 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
                     print(token)
                     print(tokens_a)
                   if token_idx == start_wp_idx_for_mention:
-                    if FLAGS.link_use_sep:
-                      poc_start_token = '[SEP]'
-                    else:
-                      poc_start_token = '[POC-%d-START]' % chain_idx
-                      # poc_start_token = '('
+                    poc_start_token = '[POC-%d-START]' % chain_idx
+                    # poc_start_token = '('
                     # # Randomly convert some of the tokens to the [MASK] token for fine-tuning
                     # if (not FLAGS.do_predict and np.random.rand() < 0.2):
                     #   positions.append(len(tokens))
@@ -1436,9 +1445,9 @@ class BertRun:
       tokenization.validate_case_matches_checkpoint(FLAGS.do_lower_case,
                                                     FLAGS.init_checkpoint)
 
-      data_root = 'data/bert'
+      data_root = 'data'
       if not os.path.exists(data_root):
-          data_root = '../data/bert'
+          data_root = '../data'
       output_folder = 'output_decoding'
       if FLAGS.coref_dataset or ('poc_dataset' in FLAGS and FLAGS.poc_dataset):
           output_folder += '_crd'
@@ -1454,10 +1463,7 @@ class BertRun:
       if FLAGS.small_training:
           output_folder += '_small'
       # output_folder += '_lr%.1E' % FLAGS.learning_rate
-      if FLAGS.dataset_name == 'duc_2004':
-          FLAGS.model_dir = os.path.join(data_root, 'cnn_dm', FLAGS.singles_and_pairs, output_folder)
-      else:
-          FLAGS.model_dir = os.path.join(data_root, FLAGS.dataset_name, FLAGS.singles_and_pairs, output_folder)
+      FLAGS.model_dir = os.path.join(data_root, output_folder)
       if FLAGS.do_predict:
           if FLAGS.small_training:
             FLAGS.model_dir = FLAGS.model_dir

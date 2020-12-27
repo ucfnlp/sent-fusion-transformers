@@ -9,6 +9,7 @@ import util
 import sys
 import glob
 import data
+import json
 
 
 FLAGS = flags.FLAGS
@@ -26,16 +27,25 @@ if 'num_instances' not in flags.FLAGS:
                          'Number of instances to run for before stopping. Use -1 to run on all instances.')
 if 'coref' not in flags.FLAGS:
     flags.DEFINE_boolean('coref', True, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
+if 'poc_dataset' not in flags.FLAGS:
+    flags.DEFINE_boolean('poc_dataset', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 flags.DEFINE_string("resolver", "spacy", "Which method to use for turning token tag probabilities into binary tags. Can be one of {threshold, summ_limit, inst_limit}.")
 
 FLAGS(sys.argv)
 
 data_dir = os.path.expanduser('~') + '/data/tf_data/with_coref_and_ssi_and_tag_tokens'
+data_dir += '_' + FLAGS.resolver
 if FLAGS.coref:
-    data_dir += '_fusions'
+    if FLAGS.poc_dataset:
+        data_dir = os.path.expanduser('~') + '/data/tf_data/poc_fusions'
+    else:
+        data_dir += '_fusions'
 if FLAGS.coref:
-    names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices', 'delimited_list_of_tuples'), ('summary_text', 'string'),
-                  ('article_lcs_paths_list', 'delimited_list_of_list_of_lists'), ('coref_chains', 'delimited_list_of_list_of_lists'), ('coref_representatives', 'string_list')]
+    if FLAGS.poc_dataset:
+        names_to_types = [('raw_article_sents', 'string_list'), ('summary_text', 'string'), ('coref_chains', 'delimited_list_of_list_of_lists')]
+    else:
+        names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices', 'delimited_list_of_tuples'), ('summary_text', 'string'),
+                      ('article_lcs_paths_list', 'delimited_list_of_list_of_lists'), ('coref_chains', 'delimited_list_of_list_of_lists'), ('coref_representatives', 'string_list')]
 else:
     names_to_types = [('raw_article_sents', 'string_list'), ('similar_source_indices', 'delimited_list_of_tuples'), ('summary_text', 'string'), ('corefs', 'json'),
                   ('doc_indices', 'delimited_list'), ('article_lcs_paths_list', 'delimited_list_of_list_of_lists')]
@@ -62,10 +72,22 @@ def flatten_coref_chains(coref_chains, raw_article_sents, ssi):
 
 
 def get_string_bert_example(output_article_text, raw_article_sents, groundtruth_summ_sent, ssi, coref_chains, example_idx, inst_id, sent2_start):
-    instance = [output_article_text, groundtruth_summ_sent, str(example_idx), str(inst_id), ' '.join([str(i) for i in ssi]), str(sent2_start)]
+    instance = [
+        output_article_text,
+        groundtruth_summ_sent,
+        str(example_idx),
+        str(inst_id),
+        # ' '.join([str(i) for i in ssi]),
+        str(sent2_start)
+    ]
     if coref_chains is not None:
         flat_coref_chains = flatten_coref_chains(coref_chains, raw_article_sents, ssi)
-        coref_chains_str = '|'.join([';'.join([' '.join(str(i) for i in mention) for mention in chain]) for chain in flat_coref_chains])
+        coref_chains_dict = {}
+        for chain_idx, chain in enumerate(flat_coref_chains):
+            coref_chains_dict['coref_chain_%d' % chain_idx] = []
+            for mention in chain:
+                coref_chains_dict['coref_chain_%d' % chain_idx].append({'start': mention[0], 'end': mention[1]})
+        coref_chains_str = json.dumps(coref_chains_dict)
         instance.append(coref_chains_str)
     return '\t'.join(instance) + '\n'
 
@@ -95,7 +117,7 @@ def main(unused_argv):
         source_dir = os.path.join(data_dir, dataset_name)
 
         if FLAGS.dataset_split == 'all':
-            if dataset_name == 'duc_2004':
+            if FLAGS.poc_dataset:
                 dataset_splits = ['test']
             else:
                 dataset_splits = ['test', 'val', 'train']
@@ -114,19 +136,34 @@ def main(unused_argv):
 
             out_dir = os.path.join('data', 'bert', dataset_name, FLAGS.singles_and_pairs, 'input_decoding')
             if FLAGS.coref:
-                out_dir += '_crd'
+                if FLAGS.poc_dataset:
+                    out_dir += '_pocd'
+                else:
+                    out_dir += '_crd'
             util.create_dirs(out_dir)
 
             writer = open(os.path.join(out_dir, dataset_split) + '.tsv', 'wb')
-            header_list = ['article_sents', 'summary_sent', 'example_idx', 'inst_id', 'ssi']
+            header_list = [
+                'article_sents',
+                'summary_sent',
+                'article_id',
+                'instance_id',
+                # 'ssi',
+                'sent_2_start_token_idx'
+            ]
             if FLAGS.coref:
                 header_list.append('coref_chains')
             writer.write(('\t'.join(header_list) + '\n').encode())
             inst_id = 0
             for example_idx, example in enumerate(tqdm(example_generator, total=total)):
                 if FLAGS.coref:
-                    raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, article_lcs_paths_list, coref_chains, coref_representatives = util.unpack_tf_example(
-                        example, names_to_types)
+                    if FLAGS.poc_dataset:
+                        raw_article_sents, groundtruth_summary_text, coref_chains = util.unpack_tf_example(
+                            example, names_to_types)
+                        groundtruth_similar_source_indices_list = [[0, 1]]
+                    else:
+                        raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, article_lcs_paths_list, coref_chains, coref_representatives = util.unpack_tf_example(
+                            example, names_to_types)
                     doc_indices = None
                 else:
                     raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, corefs, doc_indices, article_lcs_paths_list = util.unpack_tf_example(

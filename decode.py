@@ -27,6 +27,7 @@ from tqdm import tqdm
 from absl import flags
 from absl import logging
 import rouge_functions
+import json
 
 import ssi_functions
 import sys
@@ -68,16 +69,14 @@ SPACE'''.split('\n')
 class BeamSearchDecoder(object):
     """Beam search decoder."""
 
-    def __init__(self, model, batcher, vocab):
+    def __init__(self, model, batcher):
         """Initialize decoder.
 
         Args:
             model: a Seq2SeqAttentionModel object.
             batcher: a Batcher object.
-            vocab: Vocabulary object
         """
         self._batcher = batcher
-        self._vocab = vocab
         self._model = model
         if not FLAGS.unilm_decoding:
             self._model.build_graph()
@@ -105,8 +104,6 @@ class BeamSearchDecoder(object):
         if not os.path.exists(self._rouge_dec_dir): os.mkdir(self._rouge_dec_dir)
         self._human_dir = os.path.join(self._decode_dir, "human_readable")
         if not os.path.exists(self._human_dir): os.mkdir(self._human_dir)
-        self._highlight_dir = os.path.join(self._decode_dir, "highlight")
-        if not os.path.exists(self._highlight_dir): os.mkdir(self._highlight_dir)
 
 
     def append_corr_feature(self, corr_features, key, value):
@@ -132,7 +129,7 @@ class BeamSearchDecoder(object):
             flat_coref_chains.append(flat_chain)
         return flat_coref_chains
 
-    def decode_iteratively(self, example_generator, total, names_to_types, ssi_list, hps):
+    def decode_iteratively(self, source_data_path, total, ssi_list):
         if FLAGS.dataset_name == 'xsum':
             l_param = 100
         else:
@@ -146,25 +143,31 @@ class BeamSearchDecoder(object):
             FLAGS.do_predict = True
             bert_run.setUpModel()
             bert_run.setUpPredict()
-        for example_idx, example in enumerate(tqdm(example_generator, total=total)):
-            if FLAGS.poc_dataset:
-                raw_article_sents, groundtruth_summary_text, original_coref_chains = util.unpack_tf_example(example, names_to_types)
-                coref_chains = self.flatten_coref_chains(original_coref_chains, raw_article_sents, [0,1])
-                corefs = None
-                groundtruth_similar_source_indices_list = [[0,1]]
-                groundtruth_article_lcs_paths_list = [[list(range(len(sent))) for sent in raw_article_sents]]
-            elif FLAGS.coref_dataset:
-                # raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, groundtruth_article_lcs_paths_list, coref_chains, coref_representatives = util.unpack_tf_example(
-                #     example, names_to_types)
-                raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, groundtruth_article_lcs_paths_list, original_coref_chains = util.unpack_tf_example(
-                    example, names_to_types)
-                coref_chains = self.flatten_coref_chains(original_coref_chains, raw_article_sents, groundtruth_similar_source_indices_list[0])
-                corefs = None
+        with open(source_data_path) as f:
+            f_text = f.read()
+        lines = f_text.strip().split('\n')
+        data_lines = lines[1:]
+        for example_idx, example_data_line in enumerate(tqdm(data_lines)):
+            article_sents, groundtruth_summary_text, _, _, sent_2_start_token_idx, coref_chains_str = example_data_line.strip().split('\t')
+            sentence_ids = [0, 1]
+            sent2_start = int(sent_2_start_token_idx)
+            article_tokens = article_sents.strip().split()
+            raw_article_sents = [' '.join(article_tokens[:sent2_start]), ' '.join(article_tokens[sent2_start:])]
+            groundtruth_article_lcs_paths_list = [[list(range(len(sent))) for sent in raw_article_sents]]
+            groundtruth_similar_source_indices_list = [[0, 1]]
+            if FLAGS.coref or FLAGS.link:
+                coref_chains_dict = json.loads(coref_chains_str)
+                coref_chains = []
+                for chain_id in sorted(list(coref_chains_dict.keys())):
+                    chain_to_add = []
+                    for mention in coref_chains_dict[chain_id]:
+                        chain_to_add.append((mention['start'], mention['end']))
+                    coref_chains.append(chain_to_add)
             else:
-                raw_article_sents, groundtruth_similar_source_indices_list, groundtruth_summary_text, corefs, groundtruth_article_lcs_paths_list = util.unpack_tf_example(
-                    example, names_to_types)
                 coref_chains = None
-                original_coref_chains = None
+            if FLAGS.first_chain_only:
+                coref_chains = [coref_chains[0]]
+
             article_sent_tokens = [util.process_sent(sent, whitespace=True) for sent in raw_article_sents]
             groundtruth_summ_sents = [[sent.strip() for sent in groundtruth_summary_text.strip().split('\n')]]
             groundtruth_summ_sent_tokens = [sent.split(' ') for sent in groundtruth_summ_sents[0]]
@@ -197,8 +200,6 @@ class BeamSearchDecoder(object):
             final_decoded_sent_tokens = []
             final_decoded_outpus = ''
             best_hyps = []
-            highlight_html_total = '<u>System Summary</u><br><br>'
-            highlight_html_tagged = '<br><br><u>Only tagged</u><br><br>'
             my_sources = []
             for ssi_idx, ssi in enumerate(sys_ssi):
 
@@ -224,41 +225,12 @@ class BeamSearchDecoder(object):
                 final_decoded_outpus += decoded_output
                 final_decoded_sent = [' '.join(decoded_words)]
 
-                if example_idx < 100 or (example_idx >= 2000 and example_idx < 2100):
-                    min_matched_tokens = 2
-                    selected_article_sent_tokens = [util.process_sent(sent, whitespace=True) for sent in selected_raw_article_sents]
-                    highlight_summary_sent_tokens = [decoded_words]
-                    highlight_ssi_list, lcs_paths_list, highlight_article_lcs_paths_list, highlight_smooth_article_lcs_paths_list = ssi_functions.get_simple_source_indices_list(
-                        highlight_summary_sent_tokens,
-                        selected_article_sent_tokens, 2, min_matched_tokens)
-                    highlighted_html = ssi_functions.html_highlight_sents_in_article(highlight_summary_sent_tokens,
-                                                                                   highlight_ssi_list,
-                                                                                     selected_article_sent_tokens,
-                                                                                   lcs_paths_list=lcs_paths_list,
-                                                                                   article_lcs_paths_list=highlight_smooth_article_lcs_paths_list,
-                                                                                     fusion_locations=original_coref_chains
-                                                                                     )
-                                                                                   # gt_similar_source_indices_list=[list(range(len(ssi)))],
-                                                                                   # gt_article_lcs_paths_list=selected_article_lcs_paths)
-                    highlight_html_total += highlighted_html + '<br>'
-
-                    if FLAGS.tag_tokens:
-                        my_highlight_html_tagged = ssi_functions.html_highlight_sents_in_article(highlight_summary_sent_tokens,
-                                                                                          [list(range(len(ssi)))],
-                                                                                         selected_article_sent_tokens,
-                                                                                       lcs_paths_list=None,
-                                                                                       article_lcs_paths_list=selected_article_lcs_paths,
-                                                                                         fusion_locations=original_coref_chains
-                                                                                                 )
-                        highlight_html_tagged += my_highlight_html_tagged + '<br>'
-
 
                 if len(final_decoded_words) >= 100:
                     break
 
             sources_lens.append(len(my_sources))
             gt_ssi_list, gt_alp_list = util.replace_empty_ssis(groundtruth_similar_source_indices_list, raw_article_sents, sys_alp_list=groundtruth_article_lcs_paths_list)
-            highlight_html_gt = '<u>Reference Summary</u><br><br>'
             for ssi_idx, ssi in enumerate(gt_ssi_list):
                 selected_article_lcs_paths = gt_alp_list[ssi_idx]
                 try:
@@ -268,27 +240,7 @@ class BeamSearchDecoder(object):
                     raise
                 selected_raw_article_sents = util.reorder(raw_article_sents, ssi)
 
-                if example_idx < 100 or (example_idx >= 2000 and example_idx < 2100):
-                    min_matched_tokens = 2
-                    selected_article_sent_tokens = [util.process_sent(sent, whitespace=True) for sent in selected_raw_article_sents]
-                    highlight_summary_sent_tokens = [groundtruth_summ_sent_tokens[ssi_idx]]
-                    highlight_ssi_list, lcs_paths_list, highlight_article_lcs_paths_list, highlight_smooth_article_lcs_paths_list = ssi_functions.get_simple_source_indices_list(
-                        highlight_summary_sent_tokens,
-                        selected_article_sent_tokens, 2, min_matched_tokens)
-                    highlighted_html = ssi_functions.html_highlight_sents_in_article(highlight_summary_sent_tokens,
-                                                                                   highlight_ssi_list,
-                                                                                     selected_article_sent_tokens,
-                                                                                   lcs_paths_list=lcs_paths_list,
-                                                                                   article_lcs_paths_list=highlight_smooth_article_lcs_paths_list,
-                                                                                     fusion_locations=original_coref_chains
-                                                                                             )
-                    highlight_html_gt += highlighted_html + '<br>'
-
-            if example_idx < 100 or (example_idx >= 2000 and example_idx < 2100):
-                self.write_for_human(raw_article_sents, groundtruth_summ_sents, final_decoded_sent_tokens, example_idx, already_sent_split=True)
-                # highlight_html_total = ssi_functions.put_html_in_two_columns(highlight_html_total + highlight_html_tagged, highlight_html_gt)
-                highlight_html_total = highlight_html_total + highlight_html_gt
-                ssi_functions.write_highlighted_html(highlight_html_total, self._highlight_dir, example_idx)
+            self.write_for_human(raw_article_sents, groundtruth_summ_sents, final_decoded_sent_tokens, example_idx, already_sent_split=True)
 
 
             final_decoded_sents = [' '.join(sent) for sent in final_decoded_sent_tokens]
@@ -396,8 +348,6 @@ def get_decode_dir_name(ckpt_name):
     else: raise ValueError("FLAGS.data_path %s should contain one of train, val or test" % (FLAGS.data_path))
     # dirname = "decode_%s_%imaxenc_%ibeam_%imindec_%imaxdec" % (dataset, FLAGS.max_enc_steps, FLAGS.beam_size, FLAGS.min_dec_steps, FLAGS.max_dec_steps)
     dirname = "decode"
-    if FLAGS.tag_tokens:
-        dirname += '_%.02f' % FLAGS.tag_threshold
     dirname += "_%imaxenc_%imindec_%imaxdec" % (FLAGS.max_enc_steps, FLAGS.min_dec_steps, FLAGS.max_dec_steps)
     if ckpt_name is not None:
         dirname += "_%s" % ckpt_name
