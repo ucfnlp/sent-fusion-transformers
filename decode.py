@@ -29,7 +29,6 @@ from absl import logging
 import rouge_functions
 import json
 
-import ssi_functions
 import sys
 import spacy
 import bert_score
@@ -155,7 +154,7 @@ class BeamSearchDecoder(object):
             raw_article_sents = [' '.join(article_tokens[:sent2_start]), ' '.join(article_tokens[sent2_start:])]
             groundtruth_article_lcs_paths_list = [[list(range(len(sent))) for sent in raw_article_sents]]
             groundtruth_similar_source_indices_list = [[0, 1]]
-            if FLAGS.coref or FLAGS.link:
+            if FLAGS.link:
                 coref_chains_dict = json.loads(coref_chains_str)
                 coref_chains = []
                 for chain_id in sorted(list(coref_chains_dict.keys())):
@@ -178,12 +177,8 @@ class BeamSearchDecoder(object):
             if ssi_list is None:    # this is if we are doing the upper bound evaluation (ssi_list comes straight from the groundtruth)
                 sys_ssi = groundtruth_similar_source_indices_list
                 sys_alp_list = groundtruth_article_lcs_paths_list
-                if FLAGS.singles_and_pairs == 'singles':
-                    sys_ssi = util.enforce_sentence_limit(sys_ssi, 1)
-                    sys_alp_list = util.enforce_sentence_limit(sys_alp_list, 1)
-                elif FLAGS.singles_and_pairs == 'both':
-                    sys_ssi = util.enforce_sentence_limit(sys_ssi, 2)
-                    sys_alp_list = util.enforce_sentence_limit(sys_alp_list, 2)
+                sys_ssi = util.enforce_sentence_limit(sys_ssi, 2)
+                sys_alp_list = util.enforce_sentence_limit(sys_alp_list, 2)
                 sys_ssi, sys_alp_list = util.replace_empty_ssis(sys_ssi, raw_article_sents, sys_alp_list=sys_alp_list)
             else:
                 gt_ssi, sys_ssi, ext_len = ssi_list[example_idx]
@@ -266,17 +261,13 @@ class BeamSearchDecoder(object):
             for file in reference_files:
                 with open(file) as f:
                     refs.append(f.read().replace('\n', ' '))
-            # print('Calculating bert score')
             bleu = nltk.translate.bleu_score.corpus_bleu([[ref] for ref in refs], cands) * 100
-            # print(bleu)
             bert_p, bert_r, bert_f = bert_score.score(cands, refs, lang="en", verbose=False, batch_size=8,
                                                       model_type='bert-base-uncased')
-            # print(bert_p, bert_r, bert_f)
             avg_len = np.mean(lens)
             bert_p = np.mean(bert_p.cpu().numpy()) * 100
             bert_r = np.mean(bert_r.cpu().numpy()) * 100
             bert_f = np.mean(bert_f.cpu().numpy()) * 100
-            # print(bert_p)
             sheets_results_contents = sheets_results_text.strip().split('\t')
             new_results = ['%.2f' % avg_len] + sheets_results_contents + ['%.2f' % bert_p, '%.2f' % bert_r,
                                                                           '%.2f' % bert_f, '%.2f' % bleu]

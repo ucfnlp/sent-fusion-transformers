@@ -17,8 +17,6 @@ if 'dataset_name' not in flags.FLAGS:
                                                 Must be one of {tac_2011, tac_2008, duc_2004, duc_tac, cnn_dm} or a custom dataset name')
 flags.DEFINE_string('data_root', 'data', 'Path to root directory for all datasets (already converted to TensorFlow examples).')
 flags.DEFINE_string('vocab_path', 'logs/vocab', 'Path expression to text vocabulary file.')
-flags.DEFINE_string('pretrained_path', '', 'Directory of pretrained model for PG trained on singles or pairs of sentences.')
-flags.DEFINE_boolean('use_pretrained', True, 'If True, use pretrained model in the path FLAGS.pretrained_path.')
 
 # Where to save output
 flags.DEFINE_string('log_root', 'logs', 'Root directory for all logging.')
@@ -50,18 +48,13 @@ if 'min_dec_steps' not in flags.FLAGS:
     flags.DEFINE_integer('min_dec_steps', 10, 'Minimum sequence length of generated summary. Applies only for beam search decoding mode')
 flags.DEFINE_integer('vocab_size', 50000, 'Size of vocabulary. These will be read from the vocabulary file in order. If the vocabulary file contains fewer words than this number, or if this number is set to 0, will take all words in the vocabulary file.')
 
-if 'singles_and_pairs' not in flags.FLAGS:
-    flags.DEFINE_string('singles_and_pairs', 'both',
-                    'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 flags.DEFINE_integer("num_instances", -1, "How many examples to run on. -1 means to run on all of them.")
 flags.DEFINE_string('original_dataset_name', '',
                     'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 
 flags.DEFINE_boolean('unilm_decoding', True, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-if 'coref' not in flags.FLAGS:
-    flags.DEFINE_boolean('coref', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-if 'coref_dataset' not in flags.FLAGS:
-    flags.DEFINE_boolean('coref_dataset', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
+if 'heuristic_dataset' not in flags.FLAGS:
+    flags.DEFINE_boolean('heuristic_dataset', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 flags.DEFINE_string("resolver", "spacy", "Which method to use for turning token tag probabilities into binary tags. Can be one of {threshold, summ_limit, inst_limit}.")
 if 'coref_head' not in flags.FLAGS:
     flags.DEFINE_integer('coref_head', 4, 'Beam size for beam search')
@@ -79,7 +72,6 @@ if 'first_mention_only' not in flags.FLAGS:
 
 
 random_seed = 123
-# singles_and_pairs = 'both'
 start_over = True
 
 num_test_examples = 11490
@@ -94,24 +86,13 @@ def main(unused_argv):
     if len(unused_argv) != 1: # prints a message if you've entered flags incorrectly
         raise Exception("Problem with flags: %s" % unused_argv)
 
-    extractor = 'bert'
-    pretrained_dataset = FLAGS.dataset_name
-    if FLAGS.coref_dataset or FLAGS.poc_dataset:
-        FLAGS.pretrained_path = os.path.join(FLAGS.log_root, 'cnn_dm_crd_both')
-    elif FLAGS.singles_and_pairs == 'both':
-        FLAGS.pretrained_path = os.path.join(FLAGS.log_root, pretrained_dataset + '_both')
-    if FLAGS.singles_and_pairs == 'both':
-        FLAGS.exp_name = FLAGS.dataset_name + '_' + FLAGS.exp_name + '_' + extractor + '_both'
-        dataset_articles = FLAGS.dataset_name
-    if FLAGS.coref_dataset:
-        FLAGS.exp_name += '_crd'
+    FLAGS.exp_name = FLAGS.dataset_name + ('_' + FLAGS.exp_name if FLAGS.exp_name else '')
+    if FLAGS.heuristic_dataset:
+        FLAGS.exp_name += '_heuristicset'
     if FLAGS.poc_dataset:
         FLAGS.exp_name += "_pocd"
     if FLAGS.unilm_decoding:
         FLAGS.exp_name += 'unilm'
-    if FLAGS.coref:
-        FLAGS.exp_name += '_coref'
-        FLAGS.exp_name += '_l%d_h%d' % (FLAGS.coref_layer, FLAGS.coref_head)
     if FLAGS.link:
         FLAGS.exp_name += '_link'
     if FLAGS.first_chain_only:
@@ -132,18 +113,6 @@ def main(unused_argv):
 
     print(util.bcolors.OKGREEN + "Experiment path: " + FLAGS.log_root + util.bcolors.ENDC)
 
-    vocab_datasets = [os.path.basename(file_path).split('vocab_')[1] for file_path in glob.glob(FLAGS.vocab_path + '_*')]
-    original_dataset_name = [file_name for file_name in vocab_datasets if file_name in FLAGS.dataset_name]
-    if len(original_dataset_name) > 1:
-        raise Exception('Too many choices for vocab file')
-    if len(original_dataset_name) < 1:
-        raise Exception('No vocab file for dataset created. Run make_vocab.py --dataset_name=<my original dataset name>')
-    original_dataset_name = original_dataset_name[0]
-    FLAGS.original_dataset_name = original_dataset_name
-
-    # If in decode mode, set batch_size = beam_size
-    # Reason: in decode mode, we decode one example at a time.
-    # On each step, we have beam_size-many hypotheses in the beam, so we need to make a batch of these hypotheses.
     if FLAGS.mode == 'decode':
         FLAGS.batch_size = FLAGS.beam_size
     if len(unused_argv) != 1:  # prints a message if you've entered flags incorrectly
@@ -153,7 +122,7 @@ def main(unused_argv):
     if FLAGS.poc_dataset:
         source_dir += '_pocd'
     else:
-        source_dir += '_crd'
+        source_dir += '_heuristicset'
     source_data_path = os.path.join(source_dir, FLAGS.dataset_split + '.tsv')
 
     model = None

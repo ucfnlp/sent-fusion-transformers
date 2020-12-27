@@ -3,12 +3,4 @@
 .pydevproject
 .vscode
 .idea
-hidden/
-stuff/
-src/
-tf_data_merge_indices/
 .DS_Store
-visualizations/
-*.json
-highlight_pairs_ori.py
-submit.slurm

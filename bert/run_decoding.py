@@ -140,8 +140,6 @@ flags.DEFINE_string(
     "model_dir", None,
     "The output directory where the model checkpoints will be written.")
 
-if 'singles_and_pairs' not in flags.FLAGS:
-    flags.DEFINE_string('singles_and_pairs', 'both', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 if 'dataset_name' not in flags.FLAGS:
     flags.DEFINE_string('dataset_name', 'cnn_dm', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
 flags.DEFINE_string('tfrecords_folder', 'tfrecords', 'Whether to run with only single sentences or with both singles and pairs. Must be in {singles, both}.')
@@ -154,9 +152,7 @@ flags.DEFINE_integer('input_repeat', 30, 'How many times to repeat the input (th
 flags.DEFINE_integer('beam_size', 5, 'Beam size for beam search')
 flags.DEFINE_integer('min_dec_steps', 10, 'Beam size for beam search')
 flags.DEFINE_integer('max_dec_steps', 40, 'Beam size for beam search')
-# flags.DEFINE_boolean('coref', True, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-flags.DEFINE_boolean('coref', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
-flags.DEFINE_boolean('coref_dataset', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
+flags.DEFINE_boolean('heuristic_dataset', False, 'If true, save plots of each distribution -- importance, similarity, mmr. This setting makes decoding take much longer.')
 flags.DEFINE_integer('max_chains', 3, 'Beam size for beam search')
 flags.DEFINE_integer('coref_head', 4, 'Beam size for beam search')
 flags.DEFINE_integer('coref_layer', 4, 'Beam size for beam search')
@@ -218,9 +214,6 @@ class InputFeatures(object):
                lm_label_ids,
                label_weights,
                input_sequence_mask,
-               # coref_attentions_flattened,
-               coref_unique_masks_flattened,
-               which_coref_mask_flattened,
                is_real_example=True):
     self.input_ids = input_ids
     self.input_mask = input_mask
@@ -230,9 +223,6 @@ class InputFeatures(object):
     self.lm_label_ids = lm_label_ids
     self.label_weights = label_weights
     self.input_sequence_mask = input_sequence_mask
-    # self.coref_attentions_flattened = coref_attentions_flattened
-    self.coref_unique_masks_flattened = coref_unique_masks_flattened
-    self.which_coref_mask_flattened = which_coref_mask_flattened
     self.is_real_example = is_real_example
 
 
@@ -360,7 +350,7 @@ class DecodeProcessor(DataProcessor):
         text_b = None
       sentence_ids = [0, 1]
       sent2_start = int(line[4])
-      if FLAGS.coref or FLAGS.link:
+      if FLAGS.link:
         coref_chains_dict = json.loads(line[5])
         coref_chains = []
         for chain_id in sorted(list(coref_chains_dict.keys())):
@@ -408,9 +398,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
         lm_label_ids=[0] * FLAGS.max_predictions_per_seq,
         label_weights=[0.0] * FLAGS.max_predictions_per_seq,
         input_sequence_mask=[0] * max_seq_length,
-        # coref_attentions_flattened=[0] * (max_seq_length * max_seq_length),
-        coref_unique_masks_flattened=[0] * ((FLAGS.max_chains + 1) * max_seq_length),
-        which_coref_mask_flattened=[0] * ((FLAGS.max_chains + 1) * max_seq_length),
         is_real_example=False)
 
   # label_map = {}
@@ -627,55 +614,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
 
   input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
-  if FLAGS.coref:
-      chain_wordpiece_indices = []  # List of lists. Each coreference chain has a list of indices representing the wordpieces belonging to it.
-      for chain_idx, chain in enumerate(example.coref_chains):
-          if chain_idx >= FLAGS.max_chains:
-              continue
-          my_chain_indices = []
-          for mention in chain:
-              mention_indices = list(range(mention[0], mention[1]))
-              wordpiece_indices = [wp_idx for wp_idx, word_idx in enumerate(mappings_a) if word_idx in mention_indices]
-              input_id_indices = [wp_idx_to_input_ids_idx[wp_idx] for wp_idx in wordpiece_indices]
-              # wordpiece_indices = flatten_list_of_lists([mappings_a[mention_idx] for mention_idx in mention_indices])
-              my_chain_indices.extend(input_id_indices)
-          my_chain_indices = sorted(my_chain_indices)
-          chain_wordpiece_indices.append(my_chain_indices)
-      # coref_attentions = np.ones([max_seq_length, max_seq_length])  # All words that are not part of a coreference chain will have equal attention to all other words (set to 1)
-      participating_indices = list(set(flatten_list_of_lists(chain_wordpiece_indices)))
-      non_participating_indices = [idx for idx in range(max_seq_length) if idx not in participating_indices]
-      # coref_attentions[participating_indices, :] = -10000
-      # for row_idx, indices in enumerate(chain_wordpiece_indices):
-      #     for idx in indices:
-      #       coref_attentions[idx,indices] = 1    # Words that are part of a coreference chain will attend only to other words that are part of its own coreference chain
-      # coref_attentions_flattened = coref_attentions.flatten().tolist()
-
-      coref_unique_masks = np.ones([FLAGS.max_chains+1, max_seq_length])
-      which_coref_mask = np.zeros([max_seq_length, FLAGS.max_chains+1], dtype=np.int32)
-      for row_idx in range(FLAGS.max_chains):
-          coref_unique_masks[row_idx, :] = 0
-      for row_idx, indices in enumerate(chain_wordpiece_indices):
-          coref_unique_masks[row_idx, indices] = 1
-          for idx in indices:
-            which_coref_mask[idx, row_idx] = 1
-      for idx in non_participating_indices:
-          which_coref_mask[idx, FLAGS.max_chains] = 1
-      which_coref_mask_flattened = which_coref_mask.flatten().tolist()
-
-      for which in which_coref_mask:
-          assert np.sum(which) >= 1
-          assert np.sum(which) <= FLAGS.max_chains
-
-      coref_unique_masks_flattened = coref_unique_masks.flatten().tolist()
-  else:
-      coref_attentions = np.zeros([max_seq_length, max_seq_length])
-      coref_attentions_flattened = coref_attentions.flatten().tolist()
-
-      coref_unique_masks = np.zeros([FLAGS.max_chains+1, max_seq_length])
-      coref_unique_masks_flattened = coref_unique_masks.flatten().tolist()
-      which_coref_mask = np.zeros([max_seq_length, FLAGS.max_chains+1], dtype=np.int32)
-      which_coref_mask_flattened = which_coref_mask.flatten().tolist()
-
   # The mask has 1 for real tokens and 0 for padding tokens. Only real
   # tokens are attended to.
   input_mask = [1] * len(input_ids)
@@ -725,12 +663,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
   assert len(lm_label_ids) == FLAGS.max_predictions_per_seq
   assert len(label_weights) == FLAGS.max_predictions_per_seq
   assert len(input_sequence_mask) == max_seq_length
-  # assert coref_attentions.shape == (max_seq_length, max_seq_length)
-  # coref_attentions_str = ''
-  # for row in coref_attentions:
-  #     for col in row:
-  #         coref_attentions_str += str(int(col)) + ' '
-  #     coref_attentions_str += '\n'
 
   label_id = 0
   if ex_index % FLAGS.input_repeat == 0 and (ex_index < FLAGS.input_repeat * 5) and not FLAGS.do_predict:
@@ -747,7 +679,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     tf.logging.info("label_weights: %s" % " ".join([str(x) for x in label_weights]))
     tf.logging.info("input_sequence_mask: %s" % " ".join([str(x) for x in input_sequence_mask]))
     tf.logging.info("label: %s (id = %d)" % (example.label, label_id))
-    # tf.logging.info("coref_attentions: \n%s" % (coref_attentions_str))
 
   feature = InputFeatures(
       input_ids=input_ids,
@@ -758,9 +689,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
       lm_label_ids=lm_label_ids,
       label_weights=label_weights,
       input_sequence_mask=input_sequence_mask,
-      # coref_attentions_flattened=coref_attentions_flattened,
-      coref_unique_masks_flattened=coref_unique_masks_flattened,
-      which_coref_mask_flattened=which_coref_mask_flattened,
       is_real_example=True)
   return feature
 
@@ -784,14 +712,11 @@ def convert_example_to_feature(examples, label_list, max_seq_length, tokenizer, 
         features_dict["lm_label_ids"] = feature.lm_label_ids
         features_dict["label_weights"] = feature.label_weights
         features_dict["input_sequence_mask"] = feature.input_sequence_mask
-        # features_dict["coref_attentions_flattened"] = feature.coref_attentions_flattened
-        features_dict["coref_unique_masks_flattened"] = feature.coref_unique_masks_flattened
-        features_dict["which_coref_mask_flattened"] = feature.which_coref_mask_flattened
 
 
         tup = (features_dict["input_ids"], features_dict["input_mask"], features_dict["segment_ids"], features_dict["label_ids"],
                features_dict["positions"], features_dict["lm_label_ids"], features_dict["label_weights"], features_dict["input_sequence_mask"],
-               features_dict["coref_unique_masks_flattened"], features_dict["which_coref_mask_flattened"])
+               )
         tups.append(tup)
 
     return tups
@@ -827,9 +752,6 @@ def file_based_convert_examples_to_features(
     features["lm_label_ids"] = create_int_feature(feature.lm_label_ids)
     features["label_weights"] = create_float_feature(feature.label_weights)
     features["input_sequence_mask"] = create_int_feature(feature.input_sequence_mask)
-    # features["coref_attentions_flattened"] = create_float_feature(feature.coref_attentions_flattened)
-    features["coref_unique_masks_flattened"] = create_float_feature(feature.coref_unique_masks_flattened)
-    features["which_coref_mask_flattened"] = create_int_feature(feature.which_coref_mask_flattened)
     features["is_real_example"] = create_int_feature(
         [int(feature.is_real_example)])
 
@@ -853,9 +775,6 @@ def file_based_input_fn_builder(input_file, seq_length, is_training_or_val,
       "lm_label_ids": tf.FixedLenFeature([FLAGS.max_predictions_per_seq], tf.int64),
       "label_weights": tf.FixedLenFeature([FLAGS.max_predictions_per_seq], tf.float32),
       "input_sequence_mask": tf.FixedLenFeature([seq_length], tf.int64),
-      # "coref_attentions_flattened": tf.FixedLenFeature([seq_length*seq_length], tf.float32),
-      "coref_unique_masks_flattened": tf.FixedLenFeature([(FLAGS.max_chains+1)*seq_length], tf.float32),
-      "which_coref_mask_flattened": tf.FixedLenFeature([(FLAGS.max_chains+1)*seq_length], tf.int64),
   }
 
   def _decode_record(record, name_to_features):
@@ -901,15 +820,12 @@ def input_fn_builder(generator):
   def input_fn(params):
 
     output_types = (tf.int32, tf.int32, tf.int32, tf.int32, tf.int32, tf.int32, tf.float32, tf.int32,
-                    # tf.float32,
-                    tf.float32, tf.int32)
+                    )
     # output_types = tuple([output_types] * 5)
     output_shapes = (tf.TensorShape([FLAGS.max_seq_length]), tf.TensorShape([FLAGS.max_seq_length]), tf.TensorShape([FLAGS.max_seq_length]),
                                                               tf.TensorShape([]), tf.TensorShape([FLAGS.max_predictions_per_seq]), tf.TensorShape([FLAGS.max_predictions_per_seq]),
                                                               tf.TensorShape([FLAGS.max_predictions_per_seq]), tf.TensorShape([FLAGS.max_seq_length]),
-                                                            # tf.TensorShape([FLAGS.max_seq_length*FLAGS.max_seq_length]),
-                                                            tf.TensorShape([(FLAGS.max_chains+1)*FLAGS.max_seq_length]),
-                                                            tf.TensorShape([(FLAGS.max_chains+1)*FLAGS.max_seq_length]))
+                                                            )
     # output_shapes = tuple([output_shapes] * 5)
     try:
         dataset = tf.data.Dataset().from_generator(generator, output_types=output_types,
@@ -969,18 +885,8 @@ def gather_indexes(sequence_tensor, positions):
   return output_tensor
 
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
-                 labels, num_labels, use_one_hot_embeddings, positions, lm_label_ids, label_weights, input_mask_2d, coref_attentions):
+                 labels, num_labels, use_one_hot_embeddings, positions, lm_label_ids, label_weights, input_mask_2d):
     """Creates a classification model."""
-    if FLAGS.coref:
-        coref_layer = FLAGS.coref_layer
-        coref_head = FLAGS.coref_head
-        # coref_layer = None
-        # coref_head = None
-        # coref_attentions = None
-    else:
-        coref_layer = None
-        coref_head = None
-        coref_attentions = None
     model = modeling.BertModel(
       config=bert_config,
       is_training=is_training,
@@ -989,9 +895,6 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
       token_type_ids=segment_ids,
       use_one_hot_embeddings=use_one_hot_embeddings,
       input_mask_2d=input_mask_2d,
-      coref_attentions=coref_attentions,
-      coref_layer=coref_layer,
-      coref_head=coref_head,
     )
 
     output_weights = model.get_embedding_table()
@@ -1045,7 +948,7 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
         denominator = tf.reduce_sum(label_weights) + 1e-5
         loss = numerator / denominator
 
-    return (loss, per_example_loss, logits, probabilities, log_probs, model.embedding_output, reshaped_log_probs, model.pre_coref_attention_scores, model.attention_scores)
+    return (loss, per_example_loss, logits, probabilities, log_probs, model.embedding_output, reshaped_log_probs, model.attention_scores)
     # return (loss, per_example_loss, log_probs)
 
 
@@ -1072,9 +975,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       lm_label_ids = tf.stack([ex[5] for ex in x])
       label_weights = tf.stack([ex[6] for ex in x])
       input_sequence_mask = tf.stack([ex[7] for ex in x])
-      # coref_attentions_flattened = tf.stack([ex[8] for ex in x])
-      coref_unique_masks_flattened = tf.stack([ex[8] for ex in x])
-      which_coref_mask_flattened = tf.stack([ex[9] for ex in x])
       input_mask_2d = tf.sequence_mask(input_sequence_mask, FLAGS.max_seq_length)
       is_real_example = tf.ones(tf.shape(label_ids), dtype=tf.float32)
 
@@ -1089,9 +989,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       lm_label_ids = features["lm_label_ids"]
       label_weights = features["label_weights"]
       input_sequence_mask = features["input_sequence_mask"]
-      # coref_attentions_flattened = features["coref_attentions_flattened"]
-      coref_unique_masks_flattened = features["coref_unique_masks_flattened"]
-      which_coref_mask_flattened = features["which_coref_mask_flattened"]
       input_mask_2d = tf.sequence_mask(input_sequence_mask, FLAGS.max_seq_length)
       is_real_example = None
       if "is_real_example" in features:
@@ -1099,40 +996,16 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       else:
         is_real_example = tf.ones(tf.shape(label_ids), dtype=tf.float32)
 
-    # coref_attentions_ = tf.reshape(coref_attentions_flattened, [-1, FLAGS.max_seq_length, FLAGS.max_seq_length])
-
-    # coref_indices_list = tf.unstack(tf.reshape(coref_unique_masks_flattened, [-1, FLAGS.max_chains, FLAGS.max_seq_length]))
-    coref_unique_masks = tf.cast(tf.reshape(coref_unique_masks_flattened, [-1, FLAGS.max_chains+1, FLAGS.max_seq_length]), tf.int32)
-    which_coref_mask = tf.reshape(which_coref_mask_flattened, [-1, FLAGS.max_seq_length, FLAGS.max_chains+1])
-    which_coref_mask = tf.transpose(which_coref_mask, [1,0,2])
-    which_coref_mask_list = tf.unstack(which_coref_mask)
-    coref_masks = []
-    for i in range(FLAGS.max_seq_length):
-        # # masks = tf.cast(tf.boolean_mask(coref_unique_masks, which_coref_mask_list[i]), tf.bool)
-        # masks = tf.broadcast_to(tf.expand_dims(which_coref_mask_list[i], -1), coref_unique_masks.shape)
-        # filtered_masks = tf.cast(masks * coref_unique_masks, tf.bool)
-        filtered_masks = tf.cast(tf.expand_dims(which_coref_mask_list[i], -1) * coref_unique_masks, tf.bool)
-        filtered_masks = tf.transpose(filtered_masks, [1,0,2])
-        my_mask = tf.reduce_any(filtered_masks, axis=0)
-        coref_masks.append(my_mask)
-        if i == 0:
-            filtered_masks_ = filtered_masks
-            my_mask_ = my_mask
-            # mask_ = masks
-    coref_attentions = tf.cast(tf.stack(coref_masks), tf.float32)
-    coref_attentions = tf.transpose(coref_attentions, [1,0,2])
     pre_input_mask_2d = tf.zeros_like(input_mask_2d)
-    if FLAGS.coref:
-        coref_attentions = ((coref_attentions - 1) * 10000) + 1
 
 
 
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-    (total_loss, per_example_loss, logits, seq_probabilities, log_probs, embedding_output, reshaped_log_probs, pre_coref_attention_scores, attention_scores) = create_model(
+    (total_loss, per_example_loss, logits, seq_probabilities, log_probs, embedding_output, reshaped_log_probs, attention_scores) = create_model(
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
-        num_labels, use_one_hot_embeddings, positions, lm_label_ids, label_weights, input_mask_2d, coref_attentions)
+        num_labels, use_one_hot_embeddings, positions, lm_label_ids, label_weights, input_mask_2d)
 
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
@@ -1202,9 +1075,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       tf.summary.scalar("loss", total_loss)
 
       logging_hook = tf.train.LoggingTensorHook({"loss": total_loss}, every_n_iter=1)
-      # logging_hook = tf.train.LoggingTensorHook({"loss": total_loss, "coref_attentions": coref_attentions, "-----------------------coref_attentionsoriginal-------------------------": coref_attentions_}, every_n_iter=1)
-      # logging_hook = tf.train.LoggingTensorHook({"loss": total_loss, "pre_coref_attention_scores": pre_coref_attention_scores, "attention_scores": attention_scores}, every_n_iter=1)
-      # logging_hook2 = tf.train.LoggingTensorHook({"pre_coref_attention_scores": pre_coref_attention_scores,}, every_n_iter=1)
       # tf.estimator.EstimatorSpec()
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -1214,28 +1084,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
           training_hooks=[logging_hook],
           scaffold_fn=scaffold_fn)
     elif mode == tf.estimator.ModeKeys.EVAL:
-
-      # def metric_fn(per_example_loss, label_ids, logits, is_real_example, cls_loss, seq_loss):
-      #   predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
-      #   accuracy = tf.metrics.accuracy(
-      #       labels=label_ids, predictions=predictions, weights=is_real_example)
-      #   loss = tf.metrics.mean(values=per_example_loss, weights=is_real_example)
-      #   _cls_loss = tf.metrics.mean(values=cls_loss, weights=is_real_example)
-      #   _seq_loss = tf.metrics.mean(values=seq_loss, weights=is_real_example)
-      #   return {
-      #       "eval_accuracy": accuracy,
-      #       "eval_loss": loss,
-      #       "cls_loss": _cls_loss,
-      #       "seq_loss": _seq_loss,
-      #   }
-      #
-      # eval_metrics = (metric_fn,
-      #                 [per_example_loss, label_ids, logits, is_real_example])
-      # output_spec = tf.contrib.tpu.TPUEstimatorSpec(
-      #     mode=mode,
-      #     loss=total_loss,
-      #     eval_metrics=eval_metrics,
-      #     scaffold_fn=scaffold_fn)
 
       def metric_fn(masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
                     masked_lm_weights):
@@ -1274,8 +1122,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           predictions={"masked_lm_predictions": masked_lm_predictions, "input_ids": input_ids, "positions": positions, "lm_label_ids": lm_label_ids,
-                       "log_probs": reshaped_log_probs, "coref_attentions": coref_attentions, "coref_unique_masks": coref_unique_masks, "which_coref_mask": tf.transpose(which_coref_mask, [1,0,2]),
-                       "filtered_masks": tf.transpose(filtered_masks_, [1,0,2]), "my_mask": my_mask_, "input_mask_2d": input_mask_2d, "pre_input_mask_2d": pre_input_mask_2d},
+                       "log_probs": reshaped_log_probs,
+                       "input_mask_2d": input_mask_2d, "pre_input_mask_2d": pre_input_mask_2d},
           scaffold_fn=scaffold_fn)
     return output_spec
 
@@ -1449,11 +1297,8 @@ class BertRun:
       if not os.path.exists(data_root):
           data_root = '../data'
       output_folder = 'output_decoding'
-      if FLAGS.coref_dataset or ('poc_dataset' in FLAGS and FLAGS.poc_dataset):
-          output_folder += '_crd'
-      if FLAGS.coref:
-          output_folder += '_coref'
-          output_folder += '_l%d_h%d' % (FLAGS.coref_layer, FLAGS.coref_head)
+      if FLAGS.heuristic_dataset or ('poc_dataset' in FLAGS and FLAGS.poc_dataset):
+          output_folder += '_heuristicset'
       if FLAGS.link:
           output_folder += '_link'
       if FLAGS.first_chain_only:
@@ -1469,10 +1314,10 @@ class BertRun:
             FLAGS.model_dir = FLAGS.model_dir
           else:
             FLAGS.model_dir = os.path.join(FLAGS.model_dir, 'best')
-      FLAGS.data_dir = os.path.join(data_root, FLAGS.dataset_name, FLAGS.singles_and_pairs, 'input_decoding')
-      if FLAGS.coref_dataset:
-          FLAGS.data_dir += '_crd'
-      FLAGS.output_dir = os.path.join(data_root, FLAGS.dataset_name, FLAGS.singles_and_pairs, output_folder)
+      FLAGS.data_dir = os.path.join(data_root, 'input_decoding')
+      if FLAGS.heuristic_dataset:
+          FLAGS.data_dir += '_heuristicset'
+      FLAGS.output_dir = os.path.join(data_root, output_folder)
 
       if FLAGS.small_training:
           FLAGS.tfrecords_folder += '_small'
@@ -1617,10 +1462,8 @@ class BertRun:
           num_eval_examples_with_padding = num_actual_eval_examples
 
         eval_file_name = 'eval_decoding'
-        if FLAGS.coref_dataset:
-            eval_file_name += '_crd'
-        if FLAGS.coref:
-            eval_file_name += '_coref'
+        if FLAGS.heuristic_dataset:
+            eval_file_name += '_heuristicset'
         if FLAGS.link:
             eval_file_name += '_link'
         if FLAGS.first_chain_only:
@@ -1666,10 +1509,8 @@ class BertRun:
 
       if FLAGS.do_train:
         train_file_name = 'train_decoding'
-        if FLAGS.coref_dataset:
-            train_file_name += '_crd'
-        if FLAGS.coref:
-            train_file_name += '_coref'
+        if FLAGS.heuristic_dataset:
+            train_file_name += '_heuristicset'
         if FLAGS.link:
             train_file_name += '_link'
         if FLAGS.first_chain_only:
@@ -1721,10 +1562,8 @@ class BertRun:
       if FLAGS.do_predict:
         dataset_split = 'test'
         predict_name = 'predict'
-        if FLAGS.coref_dataset:
-            predict_name += '_crd'
-        if FLAGS.coref:
-            predict_name += '_coref'
+        if FLAGS.heuristic_dataset:
+            predict_name += '_heuristicset'
         if FLAGS.link:
             predict_name += '_link'
         # predict_example_generator = processor.get_test_examples(FLAGS.data_dir)
@@ -1781,12 +1620,6 @@ class BertRun:
               positions = prediction["positions"]
               lm_label_ids = prediction["lm_label_ids"]
               log_probs = prediction["log_probs"]
-              coref_attentions = prediction["coref_attentions"]
-              # coref_attentions_ = prediction["coref_attentions_"]
-              coref_unique_masks = prediction["coref_unique_masks"]
-              which_coref_mask = prediction["which_coref_mask"]
-              filtered_masks = prediction["filtered_masks"]
-              my_mask = prediction["my_mask"]
               input_mask_2d = prediction["input_mask_2d"]
               pre_input_mask_2d = prediction["pre_input_mask_2d"]
               # mask = prediction["mask"]
