@@ -1,6 +1,6 @@
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 # Modifications Copyright 2017 Abigail See
-# Modifications made 2018 by Logan Lebanoff
+# Modifications made 2020 by Logan Lebanoff
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import nltk
 import os
 import numpy as np
 
-import tensorflow as tf
 import util
 from tqdm import tqdm
 from absl import flags
@@ -30,39 +29,13 @@ import rouge_functions
 import json
 
 import sys
-import spacy
 import bert_score
-nlp = spacy.load('en_core_web_sm')
 
 path_to_this_file = os.path.realpath(__file__)
 sys.path.insert(0, os.path.join(os.path.dirname(path_to_this_file),'bert'))
 import run_decoding
 
 FLAGS = flags.FLAGS
-
-
-SECS_UNTIL_NEW_CKPT = 60 # max number of seconds before loading new checkpoint
-threshold = 0.5
-prob_to_keep = 0.33
-pos_types = '''ADJ
-ADP
-ADV
-AUX
-CONJ
-CCONJ
-DET
-INTJ
-NOUN
-NUM
-PART
-PRON
-PROPN
-PUNCT
-SCONJ
-SYM
-VERB
-X
-SPACE'''.split('\n')
 
 
 class BeamSearchDecoder(object):
@@ -77,21 +50,8 @@ class BeamSearchDecoder(object):
         """
         self._batcher = batcher
         self._model = model
-        if not FLAGS.unilm_decoding:
-            self._model.build_graph()
-            self._saver = tf.train.Saver() # we use this to load checkpoints for decoding
-            self._sess = tf.Session(config=util.get_config())
 
-        if not FLAGS.unilm_decoding:
-            # Load an initial checkpoint to use for decoding
-            ckpt_path = util.load_ckpt(self._saver, self._sess)
-
-            # Make a descriptive decode directory name
-            ckpt_name = "ckpt-" + ckpt_path.split('-')[-1] # this is something of the form "ckpt-123456"
-            self._decode_dir = os.path.join(FLAGS.log_root, get_decode_dir_name(ckpt_name))
-
-        else: # Generic decode dir name
-            self._decode_dir = os.path.join(FLAGS.log_root, "decode")
+        self._decode_dir = os.path.join(FLAGS.log_root, "decode")
 
         # Make the decode dir if necessary
         if not os.path.exists(self._decode_dir): os.makedirs(self._decode_dir)
@@ -128,7 +88,7 @@ class BeamSearchDecoder(object):
             flat_coref_chains.append(flat_chain)
         return flat_coref_chains
 
-    def decode_iteratively(self, source_data_path, total, ssi_list):
+    def decode_iteratively(self, source_data_path):
         if FLAGS.dataset_name == 'xsum':
             l_param = 100
         else:
@@ -174,22 +134,11 @@ class BeamSearchDecoder(object):
             if FLAGS.num_instances != -1 and example_idx >= FLAGS.num_instances:
                 break
 
-            if ssi_list is None:    # this is if we are doing the upper bound evaluation (ssi_list comes straight from the groundtruth)
-                sys_ssi = groundtruth_similar_source_indices_list
-                sys_alp_list = groundtruth_article_lcs_paths_list
-                sys_ssi = util.enforce_sentence_limit(sys_ssi, 2)
-                sys_alp_list = util.enforce_sentence_limit(sys_alp_list, 2)
-                sys_ssi, sys_alp_list = util.replace_empty_ssis(sys_ssi, raw_article_sents, sys_alp_list=sys_alp_list)
-            else:
-                gt_ssi, sys_ssi, ext_len = ssi_list[example_idx]
-                sys_alp_list = [[list(range(len(article_sent_tokens[source_idx]))) for source_idx in source_indices] for source_indices in sys_ssi]
-                sys_alp_list_for_gt_ssi = groundtruth_article_lcs_paths_list
-
-                sys_ssi = util.enforce_sentence_limit(sys_ssi, 2)
-                sys_alp_list = util.enforce_sentence_limit(sys_alp_list, 2)
-                sys_alp_list_for_gt_ssi = util.enforce_sentence_limit(sys_alp_list_for_gt_ssi, 2)
-                groundtruth_similar_source_indices_list = util.enforce_sentence_limit(groundtruth_similar_source_indices_list, 2)
-                gt_ssi = util.enforce_sentence_limit(gt_ssi, 2)
+            sys_ssi = groundtruth_similar_source_indices_list
+            sys_alp_list = groundtruth_article_lcs_paths_list
+            sys_ssi = util.enforce_sentence_limit(sys_ssi, 2)
+            sys_alp_list = util.enforce_sentence_limit(sys_alp_list, 2)
+            sys_ssi, sys_alp_list = util.replace_empty_ssis(sys_ssi, raw_article_sents, sys_alp_list=sys_alp_list)
 
             final_decoded_words = []
             final_decoded_sent_tokens = []
@@ -328,18 +277,3 @@ def make_html_safe(s):
     s.replace("<", "&lt;")
     s.replace(">", "&gt;")
     return s
-
-
-def get_decode_dir_name(ckpt_name):
-    """Make a descriptive name for the decode dir, including the name of the checkpoint we use to decode. This is called in single_pass mode."""
-
-    if "train" in FLAGS.data_path: dataset = "train"
-    elif "val" in FLAGS.data_path: dataset = "val"
-    elif "test" in FLAGS.data_path: dataset = "test"
-    else: raise ValueError("FLAGS.data_path %s should contain one of train, val or test" % (FLAGS.data_path))
-    # dirname = "decode_%s_%imaxenc_%ibeam_%imindec_%imaxdec" % (dataset, FLAGS.max_enc_steps, FLAGS.beam_size, FLAGS.min_dec_steps, FLAGS.max_dec_steps)
-    dirname = "decode"
-    dirname += "_%imaxenc_%imindec_%imaxdec" % (FLAGS.max_enc_steps, FLAGS.min_dec_steps, FLAGS.max_dec_steps)
-    if ckpt_name is not None:
-        dirname += "_%s" % ckpt_name
-    return dirname

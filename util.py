@@ -25,9 +25,6 @@ from absl import flags
 import itertools
 from nltk.corpus import stopwords
 import string
-import spacy
-from spacy.tokens import Doc
-from spacy.lang.en import English
 import sys
 import nltk
 
@@ -35,12 +32,6 @@ if sys.version_info >= (3, 0):
     python_version = 3
 else:
     python_version = 2
-
-nlp = English()
-try:
-    nlp2 = spacy.load('en', disable=['parser', 'ner'])
-except:
-    nlp2 = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
 FLAGS = flags.FLAGS
 
 stop_words = set(stopwords.words('english'))
@@ -294,10 +285,6 @@ def replace_empty_ssis(enforced_groundtruth_ssi_list, raw_article_sents, sys_alp
             replaced_ssi_list.append(ssi)
             replaced_alp_list.append(sys_alp_list[ssi_idx])
     return replaced_ssi_list, replaced_alp_list
-
-def lemmatize_sent_tokens(article_sent_tokens):
-    article_sent_tokens_lemma = [[t.lemma_ for t in Doc(nlp.vocab, words=[token for token in sent])] for sent in article_sent_tokens]
-    return article_sent_tokens_lemma
 
 average_sents_for_dataset = {
     'cnn_dm': 4,
