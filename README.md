@@ -25,7 +25,15 @@ There are two versions of the data found in the `data/` directory:
 2) Points of Correspondence set -- a high-quality dataset used only for testing
 
 # Trained Models and Model Outputs
-They will be posted here soon!
+Trans-Linking model trained on Heuristic set: https://drive.google.com/file/d/1GaOjLZ69nid_9NQiK7TcOz2TWNKXa4n8/view?usp=sharing
+
+Baseline Transformer model trained on Heuristic set: https://drive.google.com/file/d/1oBN6nfTTre8MwVDajB8bC1uKo1hK_RYZ/view?usp=sharing
+
+Model outputs on Heuristic set: https://drive.google.com/file/d/1K3r9t6jA8_SF32f-xL12I0yvD00wDIeh/view?usp=sharing
+(Trans-Linking is in the `cnn_dm__bert_both_crdunilm_link_fc_fm_summ100.0_ninst4` directory and the baseline Transformer is in the `cnn_dm__bert_both_crdunilm_summ100.0_ninst4` directory)
+
+Model outputs on Points of Correspondence set: https://drive.google.com/file/d/1TOA5VyyAx3BLaLSoWXL16uZVrJrjEBFc/view?usp=sharing
+(Trans-Linking is in the `cnn_dm__bert_both_pocd_pocgoldunilm_link_fc_fm_summ100.0_ninst4` directory and the baseline Transformer is in the `cnn_dm__bert_both_pocd_pocgoldunilm_summ100.0_ninst4` directory)
 
 # How to train the model
 Run the command to train the Trans-Linking model:
@@ -41,7 +49,7 @@ Run the command to run inference on a trained Trans-Linking model on the Heurist
 python run_inference.py --link --first_chain_only --first_mention_only --heuristic_dataset
 ```
 
-Run the command to run inference on a trained Trans-Linking model on the Heuristic set:
+Run the command to run inference on a trained Trans-Linking model on the Points of Correspondence test set:
 ```
-python run_inference.py --link --first_chain_only --first_mention_only --heuristic_dataset
+python run_inference.py --link --first_chain_only --first_mention_only --poc_dataset
 ```
