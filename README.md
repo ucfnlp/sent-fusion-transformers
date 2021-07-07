@@ -38,7 +38,7 @@ Model outputs on Points of Correspondence set: https://drive.google.com/file/d/1
 # How to train the model
 Run the command to train the Trans-Linking model:
 ```
-python run_inference.py --link --first_chain_only --first_mention_only --heuristic_dataset
+python bert/run_decoding.py --do_train --link --first_chain_only --first_mention_only --heuristic_dataset
 ```
 
 This will place the model files in `data/output_decoding_heuristicset_link_fc_fm/`. The model with the lowest loss on the validation data will be in `data/output_decoding_heuristicset_link_fc_fm/best/`.
