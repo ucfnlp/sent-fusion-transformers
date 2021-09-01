@@ -16,6 +16,11 @@ Code for the EMNLP 2020 paper "[Learning to Fuse Sentences with Transformers for
 }
 ```
 
+## Presentation Video
+Watch our presentation given virtually at ACL:
+
+[![Watch our presentation given virtually at >EMNLP:](https://www.cs.ucf.edu/~feiliu/img/presentation_poc.png)](https://slideslive.com/38939343/learning-to-fuse-sentences-with-transformers-for-summarization)
+
 # Data
 The data consists of > 100k sentence fusion examples for abstractive summarization. The sentences are taken from the CNN/DailyMail dataset. Each example is an input pair of sentences from the article, along with the output fused sentence. Each example also comes with *points of correspondence* information -- labeled spans from each sentence that indicate what connects the two sentences together (similar to coreference).
 
